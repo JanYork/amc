@@ -7,7 +7,7 @@
     "amc": "dist/src/main.js"
   },
   "files": [
-    "dist",
+    "dist/src",
     "README.md"
   ],
   "scripts": {

@@ -2,6 +2,7 @@ import {constants, type Dirent, type Stats} from 'node:fs';
 import {createHash, type Hash, randomUUID} from 'node:crypto';
 import {
 	access,
+	copyFile,
 	cp,
 	lstat,
 	mkdir,
@@ -59,6 +60,7 @@ export type TargetChange = Readonly<{
 }>;
 
 export type ToggleResult = Readonly<{
+	operationId: string;
 	name: string;
 	changes: ReadonlyArray<TargetChange>;
 }>;
@@ -99,6 +101,7 @@ export type MigrationBackup = Readonly<{
 }>;
 
 export type MigrationResult = Readonly<{
+	operationId: string;
 	name: string;
 	canonicalPath: string;
 	backups: ReadonlyArray<MigrationBackup>;
@@ -145,6 +148,10 @@ type ToggleAction =
 	| Readonly<{kind: 'create'; target: Target; targetPath: string}>
 	| Readonly<{kind: 'restore'; target: Target; targetPath: string; parkedPath: string}>
 	| Readonly<{kind: 'park'; target: Target; targetPath: string; parkedPath: string}>;
+
+type ToggleStep =
+	| Readonly<{kind: 'created'; target: Target; path: string}>
+	| Readonly<{kind: 'archived'; target: Target; fromPath: string; archivePath: string}>;
 
 export const targets: ReadonlyArray<Target> = ['claude', 'pi', 'codex'];
 
@@ -298,7 +305,7 @@ export async function listSkills(layout: Layout): Promise<ScanResult> {
 		}
 	}
 
-	const skills = [...names].sort().map(name => ({
+	const skills = [...names].sort(compareCodePoints).map(name => ({
 		name,
 		canonical: canonical.names.has(name),
 		states: {
@@ -312,7 +319,7 @@ export async function listSkills(layout: Layout): Promise<ScanResult> {
 		...claude.diagnostics,
 		...pi.diagnostics,
 		...codex.diagnostics,
-	].sort((left, right) => left.path.localeCompare(right.path));
+	].sort((left, right) => compareCodePoints(left.path, right.path));
 
 	return {skills, diagnostics};
 }
@@ -384,53 +391,62 @@ async function planToggle(
 	return {kind: 'park', target, targetPath, parkedPath};
 }
 
-async function applyToggle(action: ToggleAction, canonicalPath: string): Promise<void> {
+async function applyToggle(
+	action: ToggleAction,
+	canonicalPath: string,
+	archivePath: string,
+	completed: ToggleStep[],
+): Promise<void> {
 	switch (action.kind) {
 		case 'noop':
 			return;
 		case 'create':
 			await mkdir(dirname(action.targetPath), {recursive: true});
 			await symlink(canonicalPath, action.targetPath);
+			completed.push({kind: 'created', target: action.target, path: action.targetPath});
 			return;
 		case 'restore':
 			await mkdir(dirname(action.targetPath), {recursive: true});
-			await rename(action.parkedPath, action.targetPath);
+			await symlink(canonicalPath, action.targetPath);
+			completed.push({kind: 'created', target: action.target, path: action.targetPath});
+			await mkdir(dirname(archivePath), {recursive: true});
+			await rename(action.parkedPath, archivePath);
+			completed.push({kind: 'archived', target: action.target, fromPath: action.parkedPath, archivePath});
 			return;
 		case 'park':
 			await mkdir(dirname(action.parkedPath), {recursive: true});
-			await rename(action.targetPath, action.parkedPath);
+			await symlink(canonicalPath, action.parkedPath);
+			completed.push({kind: 'created', target: action.target, path: action.parkedPath});
+			await mkdir(dirname(archivePath), {recursive: true});
+			await rename(action.targetPath, archivePath);
+			completed.push({kind: 'archived', target: action.target, fromPath: action.targetPath, archivePath});
 	}
 }
 
 async function rollbackToggles(
 	layout: Layout,
 	name: string,
-	completed: ReadonlyArray<ToggleAction>,
+	operationId: string,
+	canonicalPath: string,
+	completed: ReadonlyArray<ToggleStep>,
 ): Promise<ReadonlyArray<string>> {
 	const recoveryPaths: string[] = [];
-	const failedRoot = join(layout.amc.failed, createOperationId());
+	const failedRoot = join(layout.amc.failed, operationId);
 
-	for (const action of completed.toReversed()) {
+	for (const step of completed.toReversed()) {
 		try {
-			switch (action.kind) {
-				case 'noop':
-					break;
-				case 'create': {
-					const failedPath = join(failedRoot, action.target, name);
+			switch (step.kind) {
+				case 'created': {
+					const failedPath = join(failedRoot, step.target, name);
 					await mkdir(dirname(failedPath), {recursive: true});
-					await rename(action.targetPath, failedPath);
+					await rename(step.path, failedPath);
 					break;
 				}
-				case 'restore':
-					await rename(action.targetPath, action.parkedPath);
-					break;
-				case 'park':
-					await rename(action.parkedPath, action.targetPath);
+				case 'archived':
+					await symlink(canonicalPath, step.fromPath);
 			}
 		} catch {
-			if (action.kind !== 'noop') {
-				recoveryPaths.push(action.targetPath);
-			}
+			recoveryPaths.push(step.kind === 'created' ? step.path : step.archivePath);
 		}
 	}
 
@@ -465,16 +481,17 @@ export async function setSkillEnabled(
 	if (!(await isSkillDirectory(canonicalPath))) {
 		throw new AmcError('CANONICAL_MISSING', `Canonical Skill does not exist: ${name}`, canonicalPath);
 	}
+	const operationId = createOperationId();
 
 	const actions = await Promise.all(
 		[...new Set(selectedTargets)].map(target => planToggle(layout, name, enabled, target)),
 	);
-	const completed: ToggleAction[] = [];
+	const completed: ToggleStep[] = [];
 
 	try {
 		for (const action of actions) {
-			await applyToggle(action, canonicalPath);
-			completed.push(action);
+			const archivePath = join(layout.amc.backups, operationId, 'links', action.target, name);
+			await applyToggle(action, canonicalPath, archivePath, completed);
 		}
 		for (const action of actions) {
 			const state = await classifyTargetPath(join(layout.targets[action.target], name), canonicalPath);
@@ -483,7 +500,13 @@ export async function setSkillEnabled(
 			}
 		}
 	} catch (error: unknown) {
-		const recoveryPaths = await rollbackToggles(layout, name, completed);
+		const recoveryPaths = await rollbackToggles(
+			layout,
+			name,
+			operationId,
+			canonicalPath,
+			completed,
+		);
 		const detail = error instanceof Error ? error.message : 'Unknown filesystem failure.';
 		if (recoveryPaths.length > 0) {
 			throw new AmcError(
@@ -495,7 +518,7 @@ export async function setSkillEnabled(
 		throw new AmcError('OPERATION_FAILED', `Toggle failed: ${detail}`, canonicalPath);
 	}
 
-	return {name, changes: actions.map(action => toggleChange(action, enabled))};
+	return {operationId, name, changes: actions.map(action => toggleChange(action, enabled))};
 }
 
 function compareCodePoints(left: string, right: string): number {
@@ -546,6 +569,31 @@ async function fingerprintDirectory(path: string): Promise<string> {
 	const hash = createHash('sha256');
 	await fingerprintEntry(hash, path, '');
 	return hash.digest('hex');
+}
+
+async function copyDirectoryContentsExclusive(source: string, destination: string): Promise<void> {
+	const children = [...await readdir(source, {withFileTypes: true})]
+		.sort((left, right) => compareCodePoints(left.name, right.name));
+
+	for (const child of children) {
+		const sourcePath = join(source, child.name);
+		const destinationPath = join(destination, child.name);
+		const entry = await lstat(sourcePath);
+		if (entry.isDirectory()) {
+			await mkdir(destinationPath);
+			await copyDirectoryContentsExclusive(sourcePath, destinationPath);
+			continue;
+		}
+		if (entry.isFile()) {
+			await copyFile(sourcePath, destinationPath, constants.COPYFILE_EXCL);
+			continue;
+		}
+		if (entry.isSymbolicLink()) {
+			await symlink(await readlink(sourcePath), destinationPath);
+			continue;
+		}
+		throw new AmcError('MIGRATION_BLOCKED', 'Unsupported filesystem entry in staging.', sourcePath);
+	}
 }
 
 export async function planMigration(layout: Layout, name: string): Promise<MigrationPlan> {
@@ -676,13 +724,17 @@ async function recoverMigration(
 	for (const backup of backups.toReversed()) {
 		const originalPath = join(layout.targets[backup.target], name);
 		if (await lstatIfPresent(originalPath) !== undefined) {
-			recoveryPaths.push(backup.path);
+			recoveryPaths.push(backup.path, originalPath);
 			continue;
 		}
 		try {
-			await rename(backup.path, originalPath);
+			await mkdir(originalPath);
+			await copyDirectoryContentsExclusive(backup.path, originalPath);
+			if (await fingerprintDirectory(originalPath) !== await fingerprintDirectory(backup.path)) {
+				throw new Error('Restored migration source fingerprint differs from backup.');
+			}
 		} catch {
-			recoveryPaths.push(backup.path);
+			recoveryPaths.push(backup.path, originalPath);
 		}
 	}
 
@@ -763,8 +815,19 @@ export async function executeMigration(
 
 		if (plan.canonical.state === 'missing') {
 			await mkdir(layout.amc.skills, {recursive: true});
-			await rename(stagePath, plan.canonical.path);
+			await mkdir(plan.canonical.path);
 			canonicalCreated = true;
+			await copyDirectoryContentsExclusive(stagePath, plan.canonical.path);
+			if (await fingerprintDirectory(plan.canonical.path) !== selectedSource?.fingerprint) {
+				throw new AmcError(
+					'MIGRATION_FAILED',
+					'Canonical fingerprint differs from verified staging.',
+					plan.canonical.path,
+				);
+			}
+			const stagedBackupPath = join(backupRoot, 'staging', plan.name);
+			await mkdir(dirname(stagedBackupPath), {recursive: true});
+			await rename(stagePath, stagedBackupPath);
 		}
 
 		for (const source of plan.sources) {
@@ -806,6 +869,7 @@ export async function executeMigration(
 	}
 
 	return {
+		operationId,
 		name: plan.name,
 		canonicalPath: plan.canonical.path,
 		backups,

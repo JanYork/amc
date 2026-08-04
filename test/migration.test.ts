@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir, readFile, symlink, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readlink, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {
@@ -15,6 +15,7 @@ test('migration moves one source to backup and links it to canonical storage', a
 	const source = await writeSkill(layout.targets.claude, 'alpha', 'single source');
 	await mkdir(join(source, 'empty'), {recursive: true});
 	await writeFile(join(source, 'notes.txt'), 'notes');
+	await symlink('notes.txt', join(source, 'notes-link'));
 
 	const plan = await planMigration(layout, 'alpha');
 
@@ -23,6 +24,8 @@ test('migration moves one source to backup and links it to canonical storage', a
 	assert.deepEqual(plan.blockers, []);
 	const result = await executeMigration(layout, plan);
 	assert.equal(await readFile(join(result.canonicalPath, 'SKILL.md'), 'utf8'), 'single source');
+	assert.equal(await readlink(join(result.canonicalPath, 'notes-link')), 'notes.txt');
+	assert.equal(await pathExists(join(result.canonicalPath, 'empty')), true);
 	assert.equal(result.backups.length, 1);
 	assert.equal(await pathExists(join(result.backups[0]?.path ?? '', 'SKILL.md')), true);
 	assert.equal(await resolvedLink(join(layout.targets.claude, 'alpha')), result.canonicalPath);
