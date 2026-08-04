@@ -1,6 +1,17 @@
 import {constants, type Dirent, type Stats} from 'node:fs';
-import {randomUUID} from 'node:crypto';
-import {access, lstat, mkdir, readdir, readlink, rename, stat, symlink} from 'node:fs/promises';
+import {createHash, type Hash, randomUUID} from 'node:crypto';
+import {
+	access,
+	cp,
+	lstat,
+	mkdir,
+	readdir,
+	readFile,
+	readlink,
+	rename,
+	stat,
+	symlink,
+} from 'node:fs/promises';
 import {dirname, join, resolve} from 'node:path';
 
 export type Target = 'claude' | 'pi' | 'codex';
@@ -52,13 +63,60 @@ export type ToggleResult = Readonly<{
 	changes: ReadonlyArray<TargetChange>;
 }>;
 
+export type MigrationSource = Readonly<{
+	target: Target;
+	path: string;
+	fingerprint: string;
+}>;
+
+export type MigrationBlocker = Readonly<{
+	code: 'CANONICAL_CONFLICT' | 'CANONICAL_DIFFERENCE' | 'TARGET_CONFLICT' | 'NO_SOURCE';
+	path: string;
+	message: string;
+}>;
+
+export type MigrationCanonical =
+	| Readonly<{state: 'missing'; path: string}>
+	| Readonly<{state: 'valid'; path: string; fingerprint: string}>
+	| Readonly<{state: 'conflict'; path: string}>;
+
+export type MigrationTarget =
+	| Readonly<{target: Target; state: 'disabled' | 'enabled' | 'conflict'; path: string}>
+	| Readonly<{target: Target; state: 'unmanaged'; path: string; fingerprint: string}>;
+
+export type MigrationPlan = Readonly<{
+	name: string;
+	canonical: MigrationCanonical;
+	targets: ReadonlyArray<MigrationTarget>;
+	sources: ReadonlyArray<MigrationSource>;
+	blockers: ReadonlyArray<MigrationBlocker>;
+	sourceRequired: boolean;
+}>;
+
+export type MigrationBackup = Readonly<{
+	target: Target;
+	path: string;
+}>;
+
+export type MigrationResult = Readonly<{
+	name: string;
+	canonicalPath: string;
+	backups: ReadonlyArray<MigrationBackup>;
+	linkedTargets: ReadonlyArray<Target>;
+}>;
+
 export type AmcErrorCode =
 	| 'INVALID_SKILL_NAME'
 	| 'CANONICAL_MISSING'
 	| 'TARGET_BLOCKED'
 	| 'PARKING_BLOCKED'
 	| 'OPERATION_FAILED'
-	| 'ROLLBACK_FAILED';
+	| 'ROLLBACK_FAILED'
+	| 'SOURCE_REQUIRED'
+	| 'SOURCE_INVALID'
+	| 'MIGRATION_BLOCKED'
+	| 'STALE_PLAN'
+	| 'MIGRATION_FAILED';
 
 export class AmcError extends Error {
 	readonly code: AmcErrorCode;
@@ -113,6 +171,10 @@ export function createLayout(home: string): Layout {
 
 function hasErrorCode(error: unknown, code: string): boolean {
 	return error instanceof Error && 'code' in error && error.code === code;
+}
+
+function createOperationId(): string {
+	return `${new Date().toISOString().replaceAll(':', '-')}-${randomUUID()}`;
 }
 
 async function lstatIfPresent(path: string): Promise<Stats | undefined> {
@@ -346,10 +408,7 @@ async function rollbackToggles(
 	completed: ReadonlyArray<ToggleAction>,
 ): Promise<ReadonlyArray<string>> {
 	const recoveryPaths: string[] = [];
-	const failedRoot = join(
-		layout.amc.failed,
-		`${new Date().toISOString().replaceAll(':', '-')}-${randomUUID()}`,
-	);
+	const failedRoot = join(layout.amc.failed, createOperationId());
 
 	for (const action of completed.toReversed()) {
 		try {
@@ -437,4 +496,319 @@ export async function setSkillEnabled(
 	}
 
 	return {name, changes: actions.map(action => toggleChange(action, enabled))};
+}
+
+function compareCodePoints(left: string, right: string): number {
+	return left < right ? -1 : left > right ? 1 : 0;
+}
+
+function updateFingerprint(hash: Hash, kind: string, path: string, content: string | Uint8Array): void {
+	hash.update(kind);
+	hash.update('\0');
+	hash.update(path);
+	hash.update('\0');
+	hash.update(String(content.length));
+	hash.update('\0');
+	hash.update(content);
+	hash.update('\0');
+}
+
+async function fingerprintEntry(hash: Hash, path: string, relativePath: string): Promise<void> {
+	const entry = await lstat(path);
+	if (entry.isDirectory()) {
+		updateFingerprint(hash, 'directory', relativePath, '');
+		const children = [...await readDirectory(path)].sort((left, right) =>
+			compareCodePoints(left.name, right.name));
+		for (const child of children) {
+			const childRelativePath = relativePath.length === 0
+				? child.name
+				: `${relativePath}/${child.name}`;
+			await fingerprintEntry(hash, join(path, child.name), childRelativePath);
+		}
+		return;
+	}
+	if (entry.isFile()) {
+		updateFingerprint(hash, 'file', relativePath, await readFile(path));
+		return;
+	}
+	if (entry.isSymbolicLink()) {
+		updateFingerprint(hash, 'symlink', relativePath, await readlink(path));
+		return;
+	}
+	throw new AmcError('MIGRATION_BLOCKED', 'Unsupported filesystem entry in Skill.', path);
+}
+
+async function fingerprintDirectory(path: string): Promise<string> {
+	const root = await lstatIfPresent(path);
+	if (!root?.isDirectory()) {
+		throw new AmcError('MIGRATION_BLOCKED', 'Migration source is not a directory.', path);
+	}
+	const hash = createHash('sha256');
+	await fingerprintEntry(hash, path, '');
+	return hash.digest('hex');
+}
+
+export async function planMigration(layout: Layout, name: string): Promise<MigrationPlan> {
+	validateSkillName(name);
+	const canonicalPath = join(layout.amc.skills, name);
+	const canonicalEntry = await lstatIfPresent(canonicalPath);
+	let canonical: MigrationCanonical;
+	const blockers: MigrationBlocker[] = [];
+
+	if (canonicalEntry === undefined) {
+		canonical = {state: 'missing', path: canonicalPath};
+	} else if (await isSkillDirectory(canonicalPath)) {
+		canonical = {
+			state: 'valid',
+			path: canonicalPath,
+			fingerprint: await fingerprintDirectory(canonicalPath),
+		};
+	} else {
+		canonical = {state: 'conflict', path: canonicalPath};
+		blockers.push({
+			code: 'CANONICAL_CONFLICT',
+			path: canonicalPath,
+			message: 'Canonical path exists but is not a valid Skill.',
+		});
+	}
+
+	const targetSnapshots: MigrationTarget[] = [];
+	const sources: MigrationSource[] = [];
+	for (const target of targets) {
+		const path = join(layout.targets[target], name);
+		const state = await classifyTargetPath(path, canonicalPath);
+		if (state === 'unmanaged') {
+			const fingerprint = await fingerprintDirectory(path);
+			targetSnapshots.push({target, state, path, fingerprint});
+			sources.push({target, path, fingerprint});
+		} else {
+			targetSnapshots.push({target, state, path});
+			if (state === 'conflict') {
+				blockers.push({
+					code: 'TARGET_CONFLICT',
+					path,
+					message: `Target ${target} contains a blocking entry.`,
+				});
+			}
+		}
+	}
+
+	if (canonical.state === 'valid') {
+		for (const source of sources) {
+			if (source.fingerprint !== canonical.fingerprint) {
+				blockers.push({
+					code: 'CANONICAL_DIFFERENCE',
+					path: source.path,
+					message: `Target ${source.target} differs from the canonical Skill.`,
+				});
+			}
+		}
+	} else if (canonical.state === 'missing' && sources.length === 0) {
+		blockers.push({
+			code: 'NO_SOURCE',
+			path: canonicalPath,
+			message: 'No valid unmanaged source exists for migration.',
+		});
+	}
+
+	const distinctFingerprints = new Set(sources.map(source => source.fingerprint));
+	return {
+		name,
+		canonical,
+		targets: targetSnapshots,
+		sources,
+		blockers,
+		sourceRequired: canonical.state === 'missing' && distinctFingerprints.size > 1,
+	};
+}
+
+function migrationPlansMatch(left: MigrationPlan, right: MigrationPlan): boolean {
+	return JSON.stringify(left) === JSON.stringify(right);
+}
+
+function sourceForTarget(plan: MigrationPlan, target: Target): MigrationSource | undefined {
+	return plan.sources.find(source => source.target === target);
+}
+
+async function recoverMigration(
+	layout: Layout,
+	name: string,
+	failedRoot: string,
+	stagePath: string,
+	canonicalCreated: boolean,
+	backups: ReadonlyArray<MigrationBackup>,
+	linkedTargets: ReadonlyArray<Target>,
+): Promise<ReadonlyArray<string>> {
+	const recoveryPaths: string[] = [];
+
+	for (const target of linkedTargets.toReversed()) {
+		const activePath = join(layout.targets[target], name);
+		const failedPath = join(failedRoot, 'links', target, name);
+		try {
+			await mkdir(dirname(failedPath), {recursive: true});
+			await rename(activePath, failedPath);
+		} catch {
+			recoveryPaths.push(activePath);
+		}
+	}
+
+	const canonicalPath = join(layout.amc.skills, name);
+	if (canonicalCreated && await lstatIfPresent(canonicalPath) !== undefined) {
+		const failedPath = join(failedRoot, 'canonical', name);
+		try {
+			await mkdir(dirname(failedPath), {recursive: true});
+			await rename(canonicalPath, failedPath);
+		} catch {
+			recoveryPaths.push(canonicalPath);
+		}
+	}
+
+	if (await lstatIfPresent(stagePath) !== undefined) {
+		const failedPath = join(failedRoot, 'staging', name);
+		try {
+			await mkdir(dirname(failedPath), {recursive: true});
+			await rename(stagePath, failedPath);
+		} catch {
+			recoveryPaths.push(stagePath);
+		}
+	}
+
+	for (const backup of backups.toReversed()) {
+		const originalPath = join(layout.targets[backup.target], name);
+		if (await lstatIfPresent(originalPath) !== undefined) {
+			recoveryPaths.push(backup.path);
+			continue;
+		}
+		try {
+			await rename(backup.path, originalPath);
+		} catch {
+			recoveryPaths.push(backup.path);
+		}
+	}
+
+	return recoveryPaths;
+}
+
+export async function executeMigration(
+	layout: Layout,
+	plan: MigrationPlan,
+	sourceTarget?: Target,
+): Promise<MigrationResult> {
+	if (plan.blockers.length > 0) {
+		const blocker = plan.blockers[0];
+		throw new AmcError(
+			'MIGRATION_BLOCKED',
+			blocker?.message ?? 'Migration is blocked.',
+			blocker?.path ?? join(layout.amc.skills, plan.name),
+		);
+	}
+	if (sourceTarget !== undefined && sourceForTarget(plan, sourceTarget) === undefined) {
+		throw new AmcError(
+			'SOURCE_INVALID',
+			`Target ${sourceTarget} is not a valid migration source.`,
+			join(layout.targets[sourceTarget], plan.name),
+		);
+	}
+	if (plan.sourceRequired && sourceTarget === undefined) {
+		throw new AmcError(
+			'SOURCE_REQUIRED',
+			'Migration sources differ; choose one source target.',
+			join(layout.amc.skills, plan.name),
+		);
+	}
+	if (!migrationPlansMatch(plan, await planMigration(layout, plan.name))) {
+		throw new AmcError('STALE_PLAN', 'Migration plan is stale; review a fresh plan.', plan.canonical.path);
+	}
+
+	let selectedSource: MigrationSource | undefined;
+	if (plan.canonical.state === 'missing') {
+		selectedSource = sourceTarget === undefined ? plan.sources[0] : sourceForTarget(plan, sourceTarget);
+		if (selectedSource === undefined) {
+			throw new AmcError('SOURCE_REQUIRED', 'Migration needs a valid source.', plan.canonical.path);
+		}
+	}
+
+	const operationId = createOperationId();
+	const stagePath = join(layout.amc.staging, operationId, plan.name);
+	const backupRoot = join(layout.amc.backups, operationId);
+	const failedRoot = join(layout.amc.failed, operationId);
+	const backups: MigrationBackup[] = [];
+	const linkedTargets: Target[] = [];
+	let canonicalCreated = false;
+
+	try {
+		if (selectedSource !== undefined) {
+			await mkdir(dirname(stagePath), {recursive: true});
+			await cp(selectedSource.path, stagePath, {
+				recursive: true,
+				force: false,
+				errorOnExist: true,
+				verbatimSymlinks: true,
+			});
+			if (await fingerprintDirectory(stagePath) !== selectedSource.fingerprint) {
+				throw new AmcError('MIGRATION_FAILED', 'Staging fingerprint differs from source.', stagePath);
+			}
+		}
+
+		if (!migrationPlansMatch(plan, await planMigration(layout, plan.name))) {
+			throw new AmcError('STALE_PLAN', 'Migration plan changed during staging.', plan.canonical.path);
+		}
+
+		for (const source of plan.sources) {
+			const backupPath = join(backupRoot, source.target, plan.name);
+			await mkdir(dirname(backupPath), {recursive: true});
+			await rename(source.path, backupPath);
+			backups.push({target: source.target, path: backupPath});
+		}
+
+		if (plan.canonical.state === 'missing') {
+			await mkdir(layout.amc.skills, {recursive: true});
+			await rename(stagePath, plan.canonical.path);
+			canonicalCreated = true;
+		}
+
+		for (const source of plan.sources) {
+			await mkdir(dirname(source.path), {recursive: true});
+			await symlink(plan.canonical.path, source.path);
+			linkedTargets.push(source.target);
+		}
+		for (const target of linkedTargets) {
+			if (!(await isOwnedLink(join(layout.targets[target], plan.name), plan.canonical.path))) {
+				throw new AmcError(
+					'MIGRATION_FAILED',
+					`Migration link verification failed for ${target}.`,
+					join(layout.targets[target], plan.name),
+				);
+			}
+		}
+	} catch (error: unknown) {
+		const recoveryPaths = await recoverMigration(
+			layout,
+			plan.name,
+			failedRoot,
+			stagePath,
+			canonicalCreated,
+			backups,
+			linkedTargets,
+		);
+		if (recoveryPaths.length > 0) {
+			throw new AmcError(
+				'ROLLBACK_FAILED',
+				`Migration needs manual recovery at: ${recoveryPaths.join(', ')}`,
+				recoveryPaths[0] ?? plan.canonical.path,
+			);
+		}
+		if (error instanceof AmcError) {
+			throw error;
+		}
+		const detail = error instanceof Error ? error.message : 'Unknown filesystem failure.';
+		throw new AmcError('MIGRATION_FAILED', `Migration failed: ${detail}`, plan.canonical.path);
+	}
+
+	return {
+		name: plan.name,
+		canonicalPath: plan.canonical.path,
+		backups,
+		linkedTargets,
+	};
 }
