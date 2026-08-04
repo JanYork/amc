@@ -1,13 +1,25 @@
 import assert from 'node:assert/strict';
-import {lstat, mkdir, readFile, readlink, symlink, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readFile, readdir, readlink, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {
+	AmcError,
 	createLayout,
 	executeMigration,
 	planMigration,
 } from '../src/core/index.js';
 import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js';
+
+async function waitUntilMissing(path: string): Promise<void> {
+	const deadline = Date.now() + 15_000;
+	while (Date.now() < deadline) {
+		if (!(await pathExists(path))) {
+			return;
+		}
+		await new Promise<void>(resolve => setImmediate(resolve));
+	}
+	assert.fail(`Timed out waiting for path to move: ${path}`);
+}
 
 test('migration moves one source to backup and links it to canonical storage', async () => {
 	const home = await createTestHome();
@@ -188,4 +200,62 @@ test('migration rejects a stale plan before moving an original', async () => {
 	assert.equal(await readFile(join(source, 'SKILL.md'), 'utf8'), 'after');
 	assert.equal(await pathExists(join(layout.amc.skills, 'alpha')), false);
 	assert.equal(await pathExists(layout.amc.backups), false);
+});
+
+test('migration never overwrites a canonical path created after planning', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const source = await writeSkill(layout.targets.claude, 'alpha', 'planned source');
+	const plan = await planMigration(layout, 'alpha');
+	const canonical = await writeSkill(layout.amc.skills, 'alpha', 'concurrent canonical');
+
+	await assert.rejects(executeMigration(layout, plan), {
+		name: 'AmcError',
+		code: 'STALE_PLAN',
+	});
+	assert.equal(await readFile(join(source, 'SKILL.md'), 'utf8'), 'planned source');
+	assert.equal(await readFile(join(canonical, 'SKILL.md'), 'utf8'), 'concurrent canonical');
+	assert.equal(await pathExists(layout.amc.backups), false);
+});
+
+test('migration preserves both objects when a target path reappears during apply', async () => {
+	type Outcome =
+		| Readonly<{kind: 'result'}>
+		| Readonly<{kind: 'error'; error: unknown}>;
+
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const source = await writeSkill(layout.targets.claude, 'alpha', 'original source');
+	const payload = join(source, 'payload');
+	await mkdir(payload);
+	await Promise.all(Array.from({length: 300}, (_, index) =>
+		writeFile(join(payload, `${index}.txt`), `payload ${index}`),
+	));
+	const plan = await planMigration(layout, 'alpha');
+	const outcomePromise: Promise<Outcome> = executeMigration(layout, plan).then(
+		() => ({kind: 'result'}),
+		(error: unknown) => ({kind: 'error', error}),
+	);
+
+	await waitUntilMissing(source);
+	await mkdir(source);
+	await writeFile(join(source, 'SKILL.md'), 'concurrent object');
+	const outcome = await outcomePromise;
+
+	assert.equal(outcome.kind, 'error');
+	if (outcome.kind !== 'error') {
+		assert.fail('Migration unexpectedly succeeded after a target collision.');
+	}
+	if (!(outcome.error instanceof AmcError)) {
+		assert.fail('Migration failed with a non-AMC error.');
+	}
+	const error = outcome.error;
+	assert.equal(error.code, 'ROLLBACK_FAILED');
+	const operationIds = await readdir(layout.amc.backups);
+	assert.equal(operationIds.length, 1);
+	const backupPath = join(layout.amc.backups, operationIds[0] ?? '', 'claude', 'alpha');
+	assert.equal(await readFile(join(source, 'SKILL.md'), 'utf8'), 'concurrent object');
+	assert.equal(await readFile(join(backupPath, 'SKILL.md'), 'utf8'), 'original source');
+	assert.match(error.message, new RegExp(source.replaceAll('/', '\\/'), 'u'));
+	assert.match(error.message, new RegExp(backupPath.replaceAll('/', '\\/'), 'u'));
 });

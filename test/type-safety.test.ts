@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {readdir} from 'node:fs/promises';
+import {readFile, readdir} from 'node:fs/promises';
 import {join, relative} from 'node:path';
 import test from 'node:test';
 import {type Checker, type Type, API, TypeFlags} from 'typescript/unstable/sync';
@@ -199,5 +199,12 @@ test('production source stays within the agreed type-safety and layer boundaries
 		findings.length,
 		0,
 		findings.map(formatFinding).join('\n'),
+	);
+
+	const coreSource = await readFile(join(sourceRoot, 'core', 'index.ts'), 'utf8');
+	assert.equal(
+		coreSource.match(/\brename\(/gu)?.length,
+		1,
+		'rename() must be centralized behind the operation-root safety helper',
 	);
 });

@@ -165,6 +165,8 @@ type ToggleStep =
 	| Readonly<{kind: 'created'; target: Target; path: string}>
 	| Readonly<{kind: 'archived'; target: Target; fromPath: string; archivePath: string}>;
 
+type OperationRoot = Readonly<{path: string}>;
+
 export const targets: ReadonlyArray<Target> = ['claude', 'pi', 'codex'];
 
 export function createLayout(home: string): Layout {
@@ -196,6 +198,13 @@ function createOperationId(): string {
 	return `${new Date().toISOString().replaceAll(':', '-')}-${randomUUID()}`;
 }
 
+async function createOperationRoot(parent: string, operationId: string): Promise<OperationRoot> {
+	await mkdir(parent, {recursive: true});
+	const path = join(parent, operationId);
+	await mkdir(path);
+	return {path};
+}
+
 async function lstatIfPresent(path: string): Promise<Stats | undefined> {
 	try {
 		return await lstat(path);
@@ -205,6 +214,20 @@ async function lstatIfPresent(path: string): Promise<Stats | undefined> {
 		}
 		throw error;
 	}
+}
+
+async function moveIntoOperationRoot(
+	sourcePath: string,
+	root: OperationRoot,
+	relativeParts: ReadonlyArray<string>,
+): Promise<string> {
+	const destinationPath = join(root.path, ...relativeParts);
+	await mkdir(dirname(destinationPath), {recursive: true});
+	if (await lstatIfPresent(destinationPath) !== undefined) {
+		throw new Error(`Operation destination already exists: ${destinationPath}`);
+	}
+	await rename(sourcePath, destinationPath);
+	return destinationPath;
 }
 
 async function readDirectory(path: string): Promise<ReadonlyArray<Dirent>> {
@@ -421,7 +444,8 @@ async function planToggle(
 async function applyToggle(
 	action: ToggleAction,
 	canonicalPath: string,
-	archivePath: string,
+	name: string,
+	archiveRoot: OperationRoot | undefined,
 	completed: ToggleStep[],
 ): Promise<void> {
 	switch (action.kind) {
@@ -432,21 +456,35 @@ async function applyToggle(
 			await symlink(canonicalPath, action.targetPath);
 			completed.push({kind: 'created', target: action.target, path: action.targetPath});
 			return;
-		case 'restore':
+		case 'restore': {
+			if (archiveRoot === undefined) {
+				throw new Error('Toggle archive root was not claimed.');
+			}
 			await mkdir(dirname(action.targetPath), {recursive: true});
 			await symlink(canonicalPath, action.targetPath);
 			completed.push({kind: 'created', target: action.target, path: action.targetPath});
-			await mkdir(dirname(archivePath), {recursive: true});
-			await rename(action.parkedPath, archivePath);
+			const archivePath = await moveIntoOperationRoot(
+				action.parkedPath,
+				archiveRoot,
+				['links', action.target, name],
+			);
 			completed.push({kind: 'archived', target: action.target, fromPath: action.parkedPath, archivePath});
 			return;
-		case 'park':
+		}
+		case 'park': {
+			if (archiveRoot === undefined) {
+				throw new Error('Toggle archive root was not claimed.');
+			}
 			await mkdir(dirname(action.parkedPath), {recursive: true});
 			await symlink(canonicalPath, action.parkedPath);
 			completed.push({kind: 'created', target: action.target, path: action.parkedPath});
-			await mkdir(dirname(archivePath), {recursive: true});
-			await rename(action.targetPath, archivePath);
+			const archivePath = await moveIntoOperationRoot(
+				action.targetPath,
+				archiveRoot,
+				['links', action.target, name],
+			);
 			completed.push({kind: 'archived', target: action.target, fromPath: action.targetPath, archivePath});
+		}
 	}
 }
 
@@ -458,15 +496,24 @@ async function rollbackToggles(
 	completed: ReadonlyArray<ToggleStep>,
 ): Promise<ReadonlyArray<string>> {
 	const recoveryPaths: string[] = [];
-	const failedRoot = join(layout.amc.failed, operationId);
+	let failedRoot: OperationRoot | undefined;
+	if (completed.some(step => step.kind === 'created')) {
+		try {
+			failedRoot = await createOperationRoot(layout.amc.failed, operationId);
+		} catch {
+			recoveryPaths.push(join(layout.amc.failed, operationId));
+		}
+	}
 
 	for (const step of completed.toReversed()) {
 		try {
 			switch (step.kind) {
 				case 'created': {
-					const failedPath = join(failedRoot, step.target, name);
-					await mkdir(dirname(failedPath), {recursive: true});
-					await rename(step.path, failedPath);
+					if (failedRoot === undefined) {
+						recoveryPaths.push(step.path);
+						break;
+					}
+					await moveIntoOperationRoot(step.path, failedRoot, ['links', step.target, name]);
 					break;
 				}
 				case 'archived':
@@ -516,9 +563,12 @@ export async function setSkillEnabled(
 	const completed: ToggleStep[] = [];
 
 	try {
+		const needsArchive = actions.some(action => action.kind === 'restore' || action.kind === 'park');
+		const archiveRoot = needsArchive
+			? await createOperationRoot(layout.amc.backups, operationId)
+			: undefined;
 		for (const action of actions) {
-			const archivePath = join(layout.amc.backups, operationId, 'links', action.target, name);
-			await applyToggle(action, canonicalPath, archivePath, completed);
+			await applyToggle(action, canonicalPath, name, archiveRoot, completed);
 		}
 		for (const action of actions) {
 			const state = await classifyTargetPath(join(layout.targets[action.target], name), canonicalPath);
@@ -714,20 +764,32 @@ function sourceForTarget(plan: MigrationPlan, target: Target): MigrationSource |
 async function recoverMigration(
 	layout: Layout,
 	name: string,
-	failedRoot: string,
+	operationId: string,
 	stagePath: string,
 	canonicalCreated: boolean,
 	backups: ReadonlyArray<MigrationBackup>,
 	linkedTargets: ReadonlyArray<Target>,
 ): Promise<ReadonlyArray<string>> {
 	const recoveryPaths: string[] = [];
+	const stageExists = await lstatIfPresent(stagePath) !== undefined;
+	const needsFailedRoot = linkedTargets.length > 0 || canonicalCreated || stageExists;
+	let failedRoot: OperationRoot | undefined;
+	if (needsFailedRoot) {
+		try {
+			failedRoot = await createOperationRoot(layout.amc.failed, operationId);
+		} catch {
+			recoveryPaths.push(join(layout.amc.failed, operationId));
+		}
+	}
 
 	for (const target of linkedTargets.toReversed()) {
 		const activePath = join(layout.targets[target], name);
-		const failedPath = join(failedRoot, 'links', target, name);
 		try {
-			await mkdir(dirname(failedPath), {recursive: true});
-			await rename(activePath, failedPath);
+			if (failedRoot === undefined) {
+				recoveryPaths.push(activePath);
+				continue;
+			}
+			await moveIntoOperationRoot(activePath, failedRoot, ['links', target, name]);
 		} catch {
 			recoveryPaths.push(activePath);
 		}
@@ -735,20 +797,24 @@ async function recoverMigration(
 
 	const canonicalPath = join(layout.amc.skills, name);
 	if (canonicalCreated && await lstatIfPresent(canonicalPath) !== undefined) {
-		const failedPath = join(failedRoot, 'canonical', name);
 		try {
-			await mkdir(dirname(failedPath), {recursive: true});
-			await rename(canonicalPath, failedPath);
+			if (failedRoot === undefined) {
+				recoveryPaths.push(canonicalPath);
+			} else {
+				await moveIntoOperationRoot(canonicalPath, failedRoot, ['canonical', name]);
+			}
 		} catch {
 			recoveryPaths.push(canonicalPath);
 		}
 	}
 
-	if (await lstatIfPresent(stagePath) !== undefined) {
-		const failedPath = join(failedRoot, 'staging', name);
+	if (stageExists) {
 		try {
-			await mkdir(dirname(failedPath), {recursive: true});
-			await rename(stagePath, failedPath);
+			if (failedRoot === undefined) {
+				recoveryPaths.push(stagePath);
+			} else {
+				await moveIntoOperationRoot(stagePath, failedRoot, ['staging', name]);
+			}
 		} catch {
 			recoveryPaths.push(stagePath);
 		}
@@ -827,15 +893,21 @@ export async function executeMigration(
 
 	const operationId = createOperationId();
 	const stagePath = join(layout.amc.staging, operationId, plan.name);
-	const backupRoot = join(layout.amc.backups, operationId);
-	const failedRoot = join(layout.amc.failed, operationId);
 	const backups: MigrationBackup[] = [];
 	const linkedTargets: Target[] = [];
 	let canonicalCreated = false;
 
 	try {
+		const stageRoot = selectedSource === undefined
+			? undefined
+			: await createOperationRoot(layout.amc.staging, operationId);
+		const backupRoot = plan.sources.length === 0
+			? undefined
+			: await createOperationRoot(layout.amc.backups, operationId);
 		if (selectedSource !== undefined) {
-			await mkdir(dirname(stagePath), {recursive: true});
+			if (stageRoot === undefined) {
+				throw new Error('Migration staging root was not claimed.');
+			}
 			await cp(selectedSource.contentPath, stagePath, {
 				recursive: true,
 				force: false,
@@ -851,10 +923,18 @@ export async function executeMigration(
 			throw new AmcError('STALE_PLAN', 'Migration plan changed during staging.', plan.canonical.path);
 		}
 
+		if (plan.sources.length > 0 && backupRoot === undefined) {
+			throw new Error('Migration backup root was not claimed.');
+		}
 		for (const source of plan.sources) {
-			const backupPath = join(backupRoot, source.target, plan.name);
-			await mkdir(dirname(backupPath), {recursive: true});
-			await rename(source.path, backupPath);
+			if (backupRoot === undefined) {
+				throw new Error('Migration backup root was not claimed.');
+			}
+			const backupPath = await moveIntoOperationRoot(
+				source.path,
+				backupRoot,
+				[source.target, plan.name],
+			);
 			backups.push({target: source.target, path: backupPath});
 		}
 
@@ -870,9 +950,10 @@ export async function executeMigration(
 					plan.canonical.path,
 				);
 			}
-			const stagedBackupPath = join(backupRoot, 'staging', plan.name);
-			await mkdir(dirname(stagedBackupPath), {recursive: true});
-			await rename(stagePath, stagedBackupPath);
+			if (backupRoot === undefined) {
+				throw new Error('Migration backup root was not claimed.');
+			}
+			await moveIntoOperationRoot(stagePath, backupRoot, ['staging', plan.name]);
 		}
 
 		for (const source of plan.sources) {
@@ -893,7 +974,7 @@ export async function executeMigration(
 		const recoveryPaths = await recoverMigration(
 			layout,
 			plan.name,
-			failedRoot,
+			operationId,
 			stagePath,
 			canonicalCreated,
 			backups,
