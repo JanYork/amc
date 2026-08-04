@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
+import {mkdir, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {executeCommand} from '../src/cli/index.js';
@@ -21,12 +22,103 @@ test('headless list formats the exact core state without creating stores', async
 	await writeSkill(layout.amc.skills, 'alpha');
 	await writeSkill(layout.targets.pi, 'beta');
 
-	assert.equal(await executeCommand(layout, {kind: 'list'}), [
-		'Skill\tClaude\tPi\tCodex',
-		'alpha\tdisabled\tdisabled\tdisabled',
-		'beta\tdisabled\tunmanaged\tdisabled',
+	assert.equal(await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	}), [
+		'AMC Skills · 2 total · 0 warnings',
+		'',
+		'SKILL  CLAUDE     PI         CODEX',
+		'alpha  disabled   disabled   disabled',
+		'beta   disabled   unmanaged  disabled',
+		'',
+		'Showing 1–2 of 2 · Page 1/1',
 	].join('\n'));
 	assert.equal(await pathExists(layout.amc.backups), false);
+});
+
+test('headless list renders bounded pages, search, and separate diagnostics', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	for (let index = 1; index <= 25; index += 1) {
+		await writeSkill(layout.amc.skills, `skill-${String(index).padStart(2, '0')}`);
+	}
+	await mkdir(layout.targets.claude, {recursive: true});
+	const invalidPath = join(layout.targets.claude, 'not-a-skill');
+	await writeFile(invalidPath, 'invalid');
+
+	const firstPage = await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	}, {isTTY: false, columns: 80});
+	assert.match(firstPage, /^AMC Skills · 25 total · 1 warning/m);
+	assert.equal(firstPage.split('\n').filter(line => line.startsWith('skill-')).length, 20);
+	assert.match(firstPage, /Showing 1–20 of 25 · Page 1\/2/);
+	assert.match(firstPage, /Next: amc list --page 2/);
+	assert.doesNotMatch(firstPage, /skill-21/);
+	assert.doesNotMatch(firstPage, /not-a-skill/);
+
+	const secondPage = await executeCommand(layout, {
+		kind: 'list',
+		page: 2,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	}, {isTTY: false, columns: 80});
+	assert.equal(secondPage.split('\n').filter(line => line.startsWith('skill-')).length, 5);
+	assert.match(secondPage, /skill-21/);
+	assert.match(secondPage, /Showing 21–25 of 25 · Page 2\/2/);
+
+	const searched = await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: true,
+		search: 'SKILL-2',
+		diagnostics: false,
+	}, {isTTY: false, columns: 80});
+	assert.equal(searched.split('\n').filter(line => line.startsWith('skill-')).length, 6);
+	assert.doesNotMatch(searched, /skill-19/);
+
+	const diagnostics = await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: true,
+	}, {isTTY: false, columns: 80});
+	assert.match(diagnostics, /^AMC Diagnostics · 1 total/m);
+	assert.match(diagnostics, /not-a-skill/);
+	assert.doesNotMatch(diagnostics, /^skill-01/m);
+	assert.doesNotMatch(diagnostics, /\u001B\[/u);
+});
+
+test('redirected list preserves complete long names without ANSI', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const longName = `skill-${'very-long-'.repeat(12)}`;
+	await writeSkill(layout.amc.skills, longName);
+
+	const output = await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	}, {isTTY: false, columns: 44});
+	assert.match(output, new RegExp(longName, 'u'));
+	assert.doesNotMatch(output, /\u001B\[/u);
 });
 
 test('headless enable, disable, and migrate call the shared core', async () => {
@@ -54,7 +146,14 @@ test('compiled binary supports help, empty list, and usage exit codes in an isol
 
 	const list = runBinary(home, ['list']);
 	assert.equal(list.status, 0, list.stderr);
-	assert.equal(list.stdout, 'No Skills found.\n');
+	assert.equal(list.stdout, [
+		'AMC Skills · 0 total · 0 warnings',
+		'',
+		'No Skills found.',
+		'',
+		'Showing 0–0 of 0 · Page 1/1',
+		'',
+	].join('\n'));
 	assert.equal(await pathExists(join(home, '.amc')), false);
 
 	const invalid = runBinary(home, ['enable']);
@@ -83,5 +182,5 @@ test('compiled headless binary completes migrate, disable, enable, and list end 
 
 	const listed = runBinary(home, ['list']);
 	assert.equal(listed.status, 0, listed.stderr);
-	assert.match(listed.stdout, /alpha\tdisabled\tdisabled\tenabled/);
+	assert.match(listed.stdout, /alpha\s+disabled\s+disabled\s+enabled/);
 });

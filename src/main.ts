@@ -35,7 +35,12 @@ async function main(): Promise<void> {
 			return;
 		}
 
-		process.stdout.write(`${await executeCommand(layout, command)}\n`);
+		process.stdout.write(`${await executeCommand(layout, command, {
+			isTTY: process.stdout.isTTY === true,
+			columns: process.stdout.columns === undefined || process.stdout.columns < 1
+				? 80
+				: process.stdout.columns,
+		})}\n`);
 	} catch (error: unknown) {
 		if (error instanceof UsageError) {
 			process.stderr.write(`${error.message}\n\n${helpText}\n`);

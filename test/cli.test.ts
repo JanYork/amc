@@ -9,7 +9,41 @@ test('parseCommand selects the TUI when no arguments are present', () => {
 test('parseCommand recognizes help, version, and list', () => {
 	assert.deepEqual(parseCommand(['--help']), {kind: 'help'});
 	assert.deepEqual(parseCommand(['-v']), {kind: 'version'});
-	assert.deepEqual(parseCommand(['list']), {kind: 'list'});
+	assert.deepEqual(parseCommand(['list']), {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	});
+});
+
+test('parseCommand accepts bounded list paging, search, all, and diagnostics', () => {
+	assert.deepEqual(parseCommand(['list', '--page', '3', '--limit=7', '--search', 'Code']), {
+		kind: 'list',
+		page: 3,
+		limit: 7,
+		all: false,
+		search: 'Code',
+		diagnostics: false,
+	});
+	assert.deepEqual(parseCommand(['list', '--all', '--search=gstack']), {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: true,
+		search: 'gstack',
+		diagnostics: false,
+	});
+	assert.deepEqual(parseCommand(['list', '--diagnostics', '--page=2']), {
+		kind: 'list',
+		page: 2,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: true,
+	});
 });
 
 test('parseCommand defaults enable and disable to all targets', () => {
@@ -55,8 +89,16 @@ test('parseCommand rejects every invalid usage before execution', async context 
 	const invalidCases: ReadonlyArray<ReadonlyArray<string>> = [
 		['unknown'],
 		['list', 'extra'],
+		['list', '--page', '0'],
+		['list', '--page', '1.5'],
+		['list', '--limit', '0'],
+		['list', '--limit', '101'],
+		['list', '--all', '--page', '1'],
+		['list', '--all', '--limit', '20'],
+		['list', '--search', ''],
 		['enable'],
 		['enable', '../escape'],
+		['enable', 'code-review', '--page', '2'],
 		['enable', 'code-review', '--target', 'other'],
 		['enable', 'code-review', '--source', 'claude'],
 		['disable', 'code-review', '--target', 'claude', 'extra'],
