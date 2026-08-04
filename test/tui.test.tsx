@@ -60,6 +60,23 @@ Creates a concise implementation plan.
 	instance.unmount();
 });
 
+test('Ink TUI follows the selected scope for divergent Skill details', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.targets.claude, 'alpha', '# Alpha\n\nClaude description.\n');
+	await writeSkill(layout.targets.pi, 'alpha', '# Alpha\n\nPi description.\n');
+	const instance = render(
+		<App layout={layout} presentation={darkPresentation} windowSize={{columns: 100, rows: 16}}/>,
+	);
+
+	await waitForFrame(instance.lastFrame, /Description: Claude description/);
+	instance.stdin.write('\u001B[C\u001B[C');
+	const piFrame = await waitForFrame(instance.lastFrame, /Description: Pi description/);
+	assert.match(piFrame, /Scope: Pi/);
+	assert.match(piFrame, /Source:.*\.pi\/agent\/skills\/alpha\/SKILL/);
+	instance.unmount();
+});
+
 test('Ink TUI uses a one-cell focused fallback in mono mode', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);

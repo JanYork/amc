@@ -353,7 +353,7 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 		}
 		let active = true;
 		setDetails(undefined);
-		void readSkillDetails(layout, selectedSkill.name)
+		void readSkillDetails(layout, selectedSkill.name, scope === 'all' ? undefined : scope)
 			.then(result => {
 				if (active) {
 					setDetails(result);
@@ -367,7 +367,7 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 		return () => {
 			active = false;
 		};
-	}, [layout, selectedSkill]);
+	}, [layout, scope, selectedSkill]);
 
 	const toggle = useCallback(async (
 		skill: Skill,

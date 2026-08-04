@@ -521,14 +521,21 @@ function descriptionFromContent(content: string): string {
 	return normalizeDescription(paragraph.join(' ')) || 'No description provided.';
 }
 
-export async function readSkillDetails(layout: Layout, name: string): Promise<SkillDetails> {
+export async function readSkillDetails(
+	layout: Layout,
+	name: string,
+	preferredTarget?: Target,
+): Promise<SkillDetails> {
 	validateSkillName(name);
 	const canonicalPath = join(layout.amc.skills, name);
 	let contentPath: string | undefined;
 	if (await isSkillDirectory(canonicalPath)) {
 		contentPath = canonicalPath;
 	} else {
-		for (const target of targets) {
+		const targetOrder: ReadonlyArray<Target> = preferredTarget === undefined
+			? targets
+			: [preferredTarget, ...targets.filter(target => target !== preferredTarget)];
+		for (const target of targetOrder) {
 			const observation = await observeTargetPath(
 				join(layout.targets[target], name),
 				canonicalPath,

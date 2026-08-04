@@ -120,6 +120,19 @@ Ignore this later section.
 	});
 });
 
+test('readSkillDetails prefers the selected unmanaged target source', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.targets.claude, 'delta', '# Delta\n\nClaude description.\n');
+	const piSource = await writeSkill(layout.targets.pi, 'delta', '# Delta\n\nPi description.\n');
+
+	assert.deepEqual(await readSkillDetails(layout, 'delta', 'pi'), {
+		name: 'delta',
+		description: 'Pi description.',
+		sourcePath: join(piSource, 'SKILL.md'),
+	});
+});
+
 test('setSkillEnabled enables every target by default and repeated enable is a no-op', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
