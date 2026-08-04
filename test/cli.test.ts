@@ -85,6 +85,17 @@ test('parseCommand accepts migration with an optional valid source', () => {
 	});
 });
 
+test('parseCommand accepts bulk migration inspection and apply modes', () => {
+	assert.deepEqual(parseCommand(['migrate', '--all']), {
+		kind: 'migrate-all',
+		apply: false,
+	});
+	assert.deepEqual(parseCommand(['migrate', '--all', '--yes']), {
+		kind: 'migrate-all',
+		apply: true,
+	});
+});
+
 test('parseCommand rejects every invalid usage before execution', async context => {
 	const invalidCases: ReadonlyArray<ReadonlyArray<string>> = [
 		['unknown'],
@@ -99,11 +110,16 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['enable'],
 		['enable', '../escape'],
 		['enable', 'code-review', '--page', '2'],
+		['enable', 'code-review', '--yes'],
 		['enable', 'code-review', '--target', 'other'],
 		['enable', 'code-review', '--source', 'claude'],
 		['disable', 'code-review', '--target', 'claude', 'extra'],
+		['migrate', '--yes'],
+		['migrate', 'code-review', '--all'],
 		['migrate', 'code-review', '--source', 'other'],
+		['migrate', '--all', '--source', 'claude'],
 		['migrate', 'code-review', '--target', 'codex'],
+		['list', '--yes'],
 		['--help', 'list'],
 		['--target', 'codex'],
 		['--not-an-option'],

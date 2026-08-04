@@ -1,10 +1,16 @@
 import {parseArgs} from 'node:util';
 import {
+	AmcError,
+	executeBulkMigration,
 	executeMigration,
 	listSkills,
+	planBulkMigration,
 	planMigration,
 	setSkillEnabled,
 	type Diagnostic,
+	type BulkMigrationPlan,
+	type BulkMigrationResult,
+	type BulkMigrationStatus,
 	type Layout,
 	type MigrationResult,
 	type ScanResult,
@@ -28,7 +34,8 @@ export type Command =
 	}>
 	| Readonly<{kind: 'enable'; name: string; target: Target | undefined}>
 	| Readonly<{kind: 'disable'; name: string; target: Target | undefined}>
-	| Readonly<{kind: 'migrate'; name: string; source: Target | undefined}>;
+	| Readonly<{kind: 'migrate'; name: string; source: Target | undefined}>
+	| Readonly<{kind: 'migrate-all'; apply: boolean}>;
 
 export type HeadlessCommand = Exclude<Command, {kind: 'tui'}>;
 
@@ -49,6 +56,7 @@ Usage:
   amc enable <skill> [--target claude|pi|codex]
   amc disable <skill> [--target claude|pi|codex]
   amc migrate <skill> [--source claude|pi|codex]
+  amc migrate --all [--yes]
   amc --help
   amc --version`;
 
@@ -139,6 +147,7 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 				search: {type: 'string'},
 				all: {type: 'boolean'},
 				diagnostics: {type: 'boolean'},
+				yes: {type: 'boolean'},
 			},
 		});
 
@@ -151,10 +160,19 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 		const hasSearch = values.search !== undefined;
 		const wantsAll = values.all === true;
 		const wantsDiagnostics = values.diagnostics === true;
-		const hasListOption = hasPage || hasLimit || hasSearch || wantsAll || wantsDiagnostics;
+		const wantsYes = values.yes === true;
+		const hasListOption = hasPage || hasLimit || hasSearch || wantsDiagnostics;
 
 		if (wantsHelp || wantsVersion) {
-			if (positionals.length > 0 || hasTarget || hasSource || hasListOption || (wantsHelp && wantsVersion)) {
+			if (
+				positionals.length > 0
+				|| hasTarget
+				|| hasSource
+				|| hasListOption
+				|| wantsAll
+				|| wantsYes
+				|| (wantsHelp && wantsVersion)
+			) {
 				return usage('Help and version flags must be used alone');
 			}
 
@@ -162,7 +180,7 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 		}
 
 		if (positionals.length === 0) {
-			if (hasTarget || hasSource || hasListOption) {
+			if (hasTarget || hasSource || hasListOption || wantsAll || wantsYes) {
 				return usage('Options require a command');
 			}
 
@@ -173,7 +191,7 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 		switch (kind) {
 			case 'list': {
 				requirePositionals(positionals, 1);
-				if (hasTarget || hasSource) {
+				if (hasTarget || hasSource || wantsYes) {
 					return usage('list does not accept target or source options');
 				}
 				if (wantsAll && (hasPage || hasLimit)) {
@@ -196,7 +214,7 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 			case 'enable':
 			case 'disable': {
 				requirePositionals(positionals, 2);
-				if (hasSource || hasListOption) {
+				if (hasSource || hasListOption || wantsAll || wantsYes) {
 					return usage(`${kind} accepts only --target`);
 				}
 
@@ -208,8 +226,15 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 			}
 
 			case 'migrate': {
+				if (wantsAll) {
+					requirePositionals(positionals, 1);
+					if (hasTarget || hasSource || hasListOption) {
+						return usage('migrate --all accepts only --yes');
+					}
+					return {kind: 'migrate-all', apply: wantsYes};
+				}
 				requirePositionals(positionals, 2);
-				if (hasTarget || hasListOption) {
+				if (hasTarget || hasListOption || wantsYes) {
 					return usage('migrate accepts only --source');
 				}
 
@@ -246,6 +271,72 @@ function formatMigration(result: MigrationResult): string {
 	return backups.length === 0
 		? `Migrated ${result.name} to ${result.canonicalPath}; no originals needed backup.`
 		: `Migrated ${result.name} to ${result.canonicalPath}; backups: ${backups}`;
+}
+
+const bulkPreviewLimit = 10;
+
+function previewSection(label: string, names: ReadonlyArray<string>): ReadonlyArray<string> {
+	const shown = names.slice(0, bulkPreviewLimit);
+	const lines = [`${label} (${names.length})`, ...shown.map(name => `  ${name}`)];
+	if (shown.length < names.length) {
+		lines.push(`  … ${names.length - shown.length} more`);
+	}
+	return lines;
+}
+
+function appendPreview(lines: string[], label: string, names: ReadonlyArray<string>): void {
+	if (names.length > 0) {
+		lines.push('', ...previewSection(label, names));
+	}
+}
+
+function plannedNames(plan: BulkMigrationPlan, status: BulkMigrationStatus): string[] {
+	return plan.items.filter(item => item.status === status).map(item => item.name);
+}
+
+function formatBulkPlan(plan: BulkMigrationPlan): string {
+	const ready = plannedNames(plan, 'ready');
+	const managed = plannedNames(plan, 'managed');
+	const divergent = plannedNames(plan, 'divergent');
+	const blocked = plannedNames(plan, 'blocked');
+	const details: string[] = [];
+	appendPreview(details, 'Ready', ready);
+	appendPreview(details, 'Managed', managed);
+	appendPreview(details, 'Divergent — choose a per-Skill --source', divergent);
+	appendPreview(details, 'Blocked — left untouched', blocked);
+	return [
+		'AMC Bulk Migration · DRY RUN',
+		`Ready ${ready.length} · Managed ${managed.length} · Divergent ${divergent.length} · Blocked ${blocked.length} · Warnings ${plan.diagnostics.length}`,
+		...details,
+		'',
+		'No changes made.',
+		'Apply this fresh inventory: amc migrate --all --yes',
+		'Diagnostics: amc list --diagnostics',
+	].join('\n');
+}
+
+function formatBulkResult(result: BulkMigrationResult): string {
+	const migrated = result.migrated.map(migration => migration.name);
+	const backupRoots = result.migrated.flatMap(migration => migration.backupRoot === undefined
+		? []
+		: [`${migration.name}: ${migration.backupRoot}`]);
+	const details: string[] = [];
+	appendPreview(details, 'Migrated', migrated);
+	appendPreview(details, 'Managed', result.managed);
+	appendPreview(details, 'Divergent — skipped', result.divergent);
+	appendPreview(details, 'Blocked — untouched', result.blocked);
+	appendPreview(details, 'Pending', result.pending);
+	if (result.failure !== undefined) {
+		details.push('', 'Failed (1)', `  ${result.failure.name}: ${result.failure.code} — ${result.failure.message}`);
+	}
+	return [
+		'AMC Bulk Migration · APPLY',
+		`Migrated ${migrated.length} · Managed ${result.managed.length} · Divergent ${result.divergent.length} · Blocked ${result.blocked.length} · Pending ${result.pending.length} · Warnings ${result.diagnostics.length}`,
+		...details,
+		'',
+		`Backup roots (${backupRoots.length})`,
+		...(backupRoots.length === 0 ? ['  —'] : backupRoots.map(root => `  ${root}`)),
+	].join('\n');
 }
 
 type Page<T> = Readonly<{
@@ -473,6 +564,18 @@ export async function executeCommand(
 			const plan = await planMigration(layout, command.name);
 			const result = await executeMigration(layout, plan, command.source);
 			return formatMigration(result);
+		}
+		case 'migrate-all': {
+			const plan = await planBulkMigration(layout);
+			if (!command.apply) {
+				return formatBulkPlan(plan);
+			}
+			const result = await executeBulkMigration(layout, plan);
+			const formatted = formatBulkResult(result);
+			if (result.failure !== undefined) {
+				throw new AmcError('BULK_MIGRATION_FAILED', formatted, result.failure.path);
+			}
+			return formatted;
 		}
 	}
 }

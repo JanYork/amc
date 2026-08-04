@@ -121,6 +121,23 @@ test('redirected list preserves complete long names without ANSI', async () => {
 	assert.doesNotMatch(output, /\u001B\[/u);
 });
 
+test('headless bulk dry run caps the human preview without hiding totals', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	for (let index = 0; index < 15; index += 1) {
+		await writeSkill(layout.targets.claude, `skill-${String(index).padStart(2, '0')}`);
+	}
+
+	const output = await executeCommand(layout, {kind: 'migrate-all', apply: false});
+
+	assert.match(output, /Ready 15/);
+	assert.match(output, /skill-09/);
+	assert.doesNotMatch(output, /skill-10/);
+	assert.match(output, /… 5 more/);
+	assert.ok(output.split('\n').length <= 24, output);
+	assert.equal(await pathExists(layout.amc.root), false);
+});
+
 test('headless enable, disable, and migrate call the shared core', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
@@ -159,6 +176,46 @@ test('compiled binary supports help, empty list, and usage exit codes in an isol
 	const invalid = runBinary(home, ['enable']);
 	assert.equal(invalid.status, 2);
 	assert.match(invalid.stderr, /Invalid command arguments/);
+});
+
+test('compiled bulk migrate dry run is read-only and apply mode adopts only ready Skills', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.targets.pi, 'beta', 'beta source');
+	await writeSkill(layout.targets.claude, 'alpha', 'alpha source');
+	await writeSkill(layout.targets.claude, 'gamma', 'gamma claude');
+	await writeSkill(layout.targets.pi, 'gamma', 'gamma pi');
+
+	const dryRun = runBinary(home, ['migrate', '--all']);
+	assert.equal(dryRun.status, 0, dryRun.stderr);
+	assert.match(dryRun.stdout, /DRY RUN/);
+	assert.match(dryRun.stdout, /Ready/);
+	assert.match(dryRun.stdout, /alpha/);
+	assert.match(dryRun.stdout, /beta/);
+	assert.match(dryRun.stdout, /gamma/);
+	assert.ok(dryRun.stdout.indexOf('alpha') < dryRun.stdout.indexOf('beta'));
+	assert.ok(dryRun.stdout.trimEnd().split('\n').length <= 24, dryRun.stdout);
+	assert.equal(await pathExists(layout.amc.root), false);
+	assert.equal(await pathExists(join(layout.targets.claude, 'alpha', 'SKILL.md')), true);
+	assert.equal(await pathExists(join(layout.targets.pi, 'beta', 'SKILL.md')), true);
+
+	const applied = runBinary(home, ['migrate', '--all', '--yes']);
+	assert.equal(applied.status, 0, applied.stderr);
+	assert.match(applied.stdout, /alpha/);
+	assert.match(applied.stdout, /beta/);
+	assert.match(applied.stdout, /gamma/);
+	assert.match(applied.stdout, /\.amc\/backups\//);
+	assert.ok(applied.stdout.indexOf('alpha') < applied.stdout.indexOf('beta'));
+	assert.equal(await resolvedLink(join(layout.targets.claude, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'beta')), join(layout.amc.skills, 'beta'));
+	assert.equal(await pathExists(join(layout.targets.claude, 'gamma', 'SKILL.md')), true);
+	assert.equal(await pathExists(join(layout.targets.pi, 'gamma', 'SKILL.md')), true);
+
+	const repeated = runBinary(home, ['migrate', '--all', '--yes']);
+	assert.equal(repeated.status, 0, repeated.stderr);
+	assert.match(repeated.stdout, /managed/i);
+	assert.equal(await resolvedLink(join(layout.targets.claude, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'beta')), join(layout.amc.skills, 'beta'));
 });
 
 test('compiled headless binary completes migrate, disable, enable, and list end to end', async () => {

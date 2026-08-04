@@ -170,9 +170,9 @@ test('migration reports target conflicts and writes nothing', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
 	const source = await writeSkill(layout.targets.claude, 'alpha');
-	const missing = join(home, 'missing', 'alpha');
 	await mkdir(layout.targets.pi, {recursive: true});
-	await symlink(missing, join(layout.targets.pi, 'alpha'));
+	const invalid = join(layout.targets.pi, 'alpha');
+	await writeFile(invalid, 'invalid collision');
 
 	const plan = await planMigration(layout, 'alpha');
 
@@ -182,7 +182,7 @@ test('migration reports target conflicts and writes nothing', async () => {
 		code: 'MIGRATION_BLOCKED',
 	});
 	assert.equal(await pathExists(join(source, 'SKILL.md')), true);
-	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), missing);
+	assert.equal(await readFile(invalid, 'utf8'), 'invalid collision');
 	assert.equal(await pathExists(layout.amc.backups), false);
 });
 

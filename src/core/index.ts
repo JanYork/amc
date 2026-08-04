@@ -70,6 +70,7 @@ export type MigrationSource = Readonly<{
 	path: string;
 	contentPath: string;
 	kind: 'directory' | 'foreign-link';
+	linkText: string | undefined;
 	fingerprint: string;
 }>;
 
@@ -85,8 +86,25 @@ export type MigrationCanonical =
 	| Readonly<{state: 'conflict'; path: string}>;
 
 export type MigrationTarget =
-	| Readonly<{target: Target; state: 'disabled' | 'enabled' | 'conflict'; path: string}>
-	| Readonly<{target: Target; state: 'unmanaged'; path: string; fingerprint: string}>;
+	| Readonly<{target: Target; state: 'disabled'; path: string}>
+	| Readonly<{target: Target; state: 'enabled'; path: string; linkText: string}>
+	| Readonly<{
+		target: Target;
+		state: 'unmanaged';
+		path: string;
+		kind: 'directory' | 'foreign-link';
+		contentPath: string;
+		linkText: string | undefined;
+		fingerprint: string;
+	}>
+	| Readonly<{
+		target: Target;
+		state: 'conflict';
+		path: string;
+		kind: 'broken-link' | 'invalid';
+		contentPath: string | undefined;
+		linkText: string | undefined;
+	}>;
 
 export type MigrationPlan = Readonly<{
 	name: string;
@@ -106,6 +124,7 @@ export type MigrationResult = Readonly<{
 	operationId: string;
 	name: string;
 	canonicalPath: string;
+	backupRoot: string | undefined;
 	backups: ReadonlyArray<MigrationBackup>;
 	linkedTargets: ReadonlyArray<Target>;
 }>;
@@ -121,7 +140,8 @@ export type AmcErrorCode =
 	| 'SOURCE_INVALID'
 	| 'MIGRATION_BLOCKED'
 	| 'STALE_PLAN'
-	| 'MIGRATION_FAILED';
+	| 'MIGRATION_FAILED'
+	| 'BULK_MIGRATION_FAILED';
 
 export class AmcError extends Error {
 	readonly code: AmcErrorCode;
@@ -135,6 +155,36 @@ export class AmcError extends Error {
 	}
 }
 
+export type BulkMigrationStatus = 'ready' | 'managed' | 'divergent' | 'blocked';
+
+export type BulkMigrationItem = Readonly<{
+	name: string;
+	status: BulkMigrationStatus;
+	plan: MigrationPlan;
+}>;
+
+export type BulkMigrationPlan = Readonly<{
+	items: ReadonlyArray<BulkMigrationItem>;
+	diagnostics: ReadonlyArray<Diagnostic>;
+}>;
+
+export type BulkMigrationFailure = Readonly<{
+	name: string;
+	code: AmcErrorCode | 'UNEXPECTED';
+	message: string;
+	path: string;
+}>;
+
+export type BulkMigrationResult = Readonly<{
+	migrated: ReadonlyArray<MigrationResult>;
+	managed: ReadonlyArray<string>;
+	divergent: ReadonlyArray<string>;
+	blocked: ReadonlyArray<string>;
+	pending: ReadonlyArray<string>;
+	diagnostics: ReadonlyArray<Diagnostic>;
+	failure: BulkMigrationFailure | undefined;
+}>;
+
 type TargetEntry = Readonly<{
 	state: Exclude<TargetState, 'disabled'>;
 	visible: boolean;
@@ -142,13 +192,19 @@ type TargetEntry = Readonly<{
 
 type TargetObservation =
 	| Readonly<{state: 'disabled'}>
-	| Readonly<{state: 'enabled'}>
+	| Readonly<{state: 'enabled'; linkText: string}>
 	| Readonly<{
 		state: 'unmanaged';
 		kind: 'directory' | 'foreign-link';
 		contentPath: string;
+		linkText: string | undefined;
 	}>
-	| Readonly<{state: 'conflict'; kind: 'broken-link' | 'invalid'}>;
+	| Readonly<{
+		state: 'conflict';
+		kind: 'broken-link' | 'invalid';
+		contentPath: string | undefined;
+		linkText: string | undefined;
+	}>;
 
 type TargetScan = Readonly<{
 	entries: ReadonlyMap<string, TargetEntry>;
@@ -272,19 +328,20 @@ async function observeTargetPath(
 		return {state: 'disabled'};
 	}
 	if (entry.isSymbolicLink()) {
-		const contentPath = resolve(dirname(path), await readlink(path));
+		const linkText = await readlink(path);
+		const contentPath = resolve(dirname(path), linkText);
 		if (contentPath === resolve(canonicalPath) && canonicalValid) {
-			return {state: 'enabled'};
+			return {state: 'enabled', linkText};
 		}
 		if (await isSkillDirectory(contentPath)) {
-			return {state: 'unmanaged', kind: 'foreign-link', contentPath};
+			return {state: 'unmanaged', kind: 'foreign-link', contentPath, linkText};
 		}
-		return {state: 'conflict', kind: 'broken-link'};
+		return {state: 'conflict', kind: 'broken-link', contentPath, linkText};
 	}
 	if (entry.isDirectory() && await isSkillDirectory(path)) {
-		return {state: 'unmanaged', kind: 'directory', contentPath: path};
+		return {state: 'unmanaged', kind: 'directory', contentPath: path, linkText: undefined};
 	}
-	return {state: 'conflict', kind: 'invalid'};
+	return {state: 'conflict', kind: 'invalid', contentPath: undefined, linkText: undefined};
 }
 
 async function scanCanonical(path: string): Promise<Readonly<{
@@ -702,25 +759,51 @@ export async function planMigration(layout: Layout, name: string): Promise<Migra
 	for (const target of targets) {
 		const path = join(layout.targets[target], name);
 		const observation = await observeTargetPath(path, canonicalPath, canonical.state === 'valid');
-		if (observation.state === 'unmanaged') {
-			const fingerprint = await fingerprintDirectory(observation.contentPath);
-			targetSnapshots.push({target, state: observation.state, path, fingerprint});
-			sources.push({
-				target,
-				path,
-				contentPath: observation.contentPath,
-				kind: observation.kind,
-				fingerprint,
-			});
-		} else {
-			targetSnapshots.push({target, state: observation.state, path});
-			if (observation.state === 'conflict') {
-				blockers.push({
-					code: 'TARGET_CONFLICT',
+		switch (observation.state) {
+			case 'disabled':
+				targetSnapshots.push({target, state: observation.state, path});
+				break;
+			case 'enabled':
+				targetSnapshots.push({target, state: observation.state, path, linkText: observation.linkText});
+				break;
+			case 'unmanaged': {
+				const fingerprint = await fingerprintDirectory(observation.contentPath);
+				targetSnapshots.push({
+					target,
+					state: observation.state,
 					path,
-					message: `Target ${target} contains a blocking entry.`,
+					kind: observation.kind,
+					contentPath: observation.contentPath,
+					linkText: observation.linkText,
+					fingerprint,
 				});
+				sources.push({
+					target,
+					path,
+					contentPath: observation.contentPath,
+					kind: observation.kind,
+					linkText: observation.linkText,
+					fingerprint,
+				});
+				break;
 			}
+			case 'conflict':
+				targetSnapshots.push({
+					target,
+					state: observation.state,
+					path,
+					kind: observation.kind,
+					contentPath: observation.contentPath,
+					linkText: observation.linkText,
+				});
+				if (observation.kind === 'invalid') {
+					blockers.push({
+						code: 'TARGET_CONFLICT',
+						path,
+						message: `Target ${target} contains a blocking entry.`,
+					});
+				}
+				break;
 		}
 	}
 
@@ -741,6 +824,17 @@ export async function planMigration(layout: Layout, name: string): Promise<Migra
 			message: 'No valid unmanaged source exists for migration.',
 		});
 	}
+	if (canonical.state !== 'valid' && sources.length === 0) {
+		for (const target of targetSnapshots) {
+			if (target.state === 'conflict' && target.kind === 'broken-link') {
+				blockers.push({
+					code: 'TARGET_CONFLICT',
+					path: target.path,
+					message: `Target ${target.target} contains a broken link without a valid same-name source.`,
+				});
+			}
+		}
+	}
 
 	const distinctFingerprints = new Set(sources.map(source => source.fingerprint));
 	return {
@@ -751,6 +845,32 @@ export async function planMigration(layout: Layout, name: string): Promise<Migra
 		blockers,
 		sourceRequired: canonical.state === 'missing' && distinctFingerprints.size > 1,
 	};
+}
+
+function isArchivableTarget(target: MigrationTarget): boolean {
+	return target.state === 'unmanaged'
+		|| (target.state === 'conflict' && target.kind === 'broken-link');
+}
+
+function bulkMigrationStatus(plan: MigrationPlan): BulkMigrationStatus {
+	const hasHardBlocker = plan.blockers.some(blocker => blocker.code !== 'CANONICAL_DIFFERENCE');
+	if (hasHardBlocker) {
+		return 'blocked';
+	}
+	if (plan.sourceRequired || plan.blockers.some(blocker => blocker.code === 'CANONICAL_DIFFERENCE')) {
+		return 'divergent';
+	}
+	return plan.targets.some(isArchivableTarget) ? 'ready' : 'managed';
+}
+
+export async function planBulkMigration(layout: Layout): Promise<BulkMigrationPlan> {
+	const scan = await listSkills(layout);
+	const items: BulkMigrationItem[] = [];
+	for (const skill of scan.skills) {
+		const plan = await planMigration(layout, skill.name);
+		items.push({name: skill.name, status: bulkMigrationStatus(plan), plan});
+	}
+	return {items, diagnostics: scan.diagnostics};
 }
 
 function migrationPlansMatch(left: MigrationPlan, right: MigrationPlan): boolean {
@@ -896,12 +1016,13 @@ export async function executeMigration(
 	const backups: MigrationBackup[] = [];
 	const linkedTargets: Target[] = [];
 	let canonicalCreated = false;
+	let backupRoot: OperationRoot | undefined;
 
 	try {
 		const stageRoot = selectedSource === undefined
 			? undefined
 			: await createOperationRoot(layout.amc.staging, operationId);
-		const backupRoot = plan.sources.length === 0
+		backupRoot = !plan.targets.some(isArchivableTarget)
 			? undefined
 			: await createOperationRoot(layout.amc.backups, operationId);
 		if (selectedSource !== undefined) {
@@ -923,19 +1044,22 @@ export async function executeMigration(
 			throw new AmcError('STALE_PLAN', 'Migration plan changed during staging.', plan.canonical.path);
 		}
 
-		if (plan.sources.length > 0 && backupRoot === undefined) {
+		if (plan.targets.some(isArchivableTarget) && backupRoot === undefined) {
 			throw new Error('Migration backup root was not claimed.');
 		}
-		for (const source of plan.sources) {
+		for (const target of plan.targets) {
+			if (!isArchivableTarget(target)) {
+				continue;
+			}
 			if (backupRoot === undefined) {
 				throw new Error('Migration backup root was not claimed.');
 			}
 			const backupPath = await moveIntoOperationRoot(
-				source.path,
+				target.path,
 				backupRoot,
-				[source.target, plan.name],
+				[target.target, plan.name],
 			);
-			backups.push({target: source.target, path: backupPath});
+			backups.push({target: target.target, path: backupPath});
 		}
 
 		if (plan.canonical.state === 'missing') {
@@ -956,10 +1080,11 @@ export async function executeMigration(
 			await moveIntoOperationRoot(stagePath, backupRoot, ['staging', plan.name]);
 		}
 
-		for (const source of plan.sources) {
-			await mkdir(dirname(source.path), {recursive: true});
-			await symlink(plan.canonical.path, source.path);
-			linkedTargets.push(source.target);
+		for (const backup of backups) {
+			const targetPath = join(layout.targets[backup.target], plan.name);
+			await mkdir(dirname(targetPath), {recursive: true});
+			await symlink(plan.canonical.path, targetPath);
+			linkedTargets.push(backup.target);
 		}
 		for (const target of linkedTargets) {
 			if (!(await isOwnedLink(join(layout.targets[target], plan.name), plan.canonical.path))) {
@@ -998,7 +1123,60 @@ export async function executeMigration(
 		operationId,
 		name: plan.name,
 		canonicalPath: plan.canonical.path,
+		backupRoot: backupRoot?.path,
 		backups,
 		linkedTargets,
+	};
+}
+
+function bulkFailure(layout: Layout, name: string, error: unknown): BulkMigrationFailure {
+	if (error instanceof AmcError) {
+		return {name, code: error.code, message: error.message, path: error.path};
+	}
+	return {
+		name,
+		code: 'UNEXPECTED',
+		message: error instanceof Error ? error.message : 'Unexpected bulk migration failure.',
+		path: join(layout.amc.skills, name),
+	};
+}
+
+function bulkNames(plan: BulkMigrationPlan, status: BulkMigrationStatus): string[] {
+	return plan.items.filter(item => item.status === status).map(item => item.name);
+}
+
+export async function executeBulkMigration(
+	layout: Layout,
+	plan: BulkMigrationPlan,
+): Promise<BulkMigrationResult> {
+	const ready = plan.items.filter(item => item.status === 'ready');
+	const managed = bulkNames(plan, 'managed');
+	const divergent = bulkNames(plan, 'divergent');
+	const blocked = bulkNames(plan, 'blocked');
+	const migrated: MigrationResult[] = [];
+	for (const [index, item] of ready.entries()) {
+		try {
+			migrated.push(await executeMigration(layout, item.plan));
+		} catch (error: unknown) {
+			return {
+				migrated,
+				managed,
+				divergent,
+				blocked,
+				pending: ready.slice(index + 1).map(candidate => candidate.name),
+				diagnostics: plan.diagnostics,
+				failure: bulkFailure(layout, item.name, error),
+			};
+		}
+	}
+
+	return {
+		migrated,
+		managed,
+		divergent,
+		blocked,
+		pending: [],
+		diagnostics: plan.diagnostics,
+		failure: undefined,
 	};
 }
