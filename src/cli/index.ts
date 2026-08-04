@@ -1,5 +1,14 @@
 import {parseArgs} from 'node:util';
-import type {Target} from '../core/index.js';
+import {
+	executeMigration,
+	listSkills,
+	planMigration,
+	setSkillEnabled,
+	type Layout,
+	type MigrationResult,
+	type Target,
+	type ToggleResult,
+} from '../core/index.js';
 
 export type Command =
 	| Readonly<{kind: 'tui'}>
@@ -9,6 +18,21 @@ export type Command =
 	| Readonly<{kind: 'enable'; name: string; target: Target | undefined}>
 	| Readonly<{kind: 'disable'; name: string; target: Target | undefined}>
 	| Readonly<{kind: 'migrate'; name: string; source: Target | undefined}>;
+
+export type HeadlessCommand = Exclude<Command, {kind: 'tui'}>;
+
+export const version = '0.1.0';
+
+export const helpText = `AMC — Agent Management CLI
+
+Usage:
+  amc
+  amc list
+  amc enable <skill> [--target claude|pi|codex]
+  amc disable <skill> [--target claude|pi|codex]
+  amc migrate <skill> [--source claude|pi|codex]
+  amc --help
+  amc --version`;
 
 export class UsageError extends Error {
 	readonly exitCode = 2;
@@ -146,5 +170,64 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 		}
 
 		throw new UsageError(error instanceof Error ? error.message : 'Invalid arguments');
+	}
+}
+
+function formatToggle(result: ToggleResult, enabled: boolean): string {
+	const action = enabled ? 'Enabled' : 'Disabled';
+	const changes = result.changes
+		.map(change => `${change.target}=${change.changed ? 'changed' : 'no-op'}`)
+		.join(' ');
+	return `${action} ${result.name}: ${changes}`;
+}
+
+function formatMigration(result: MigrationResult): string {
+	const backups = result.backups.map(backup => backup.path).join(', ');
+	return backups.length === 0
+		? `Migrated ${result.name} to ${result.canonicalPath}; no originals needed backup.`
+		: `Migrated ${result.name} to ${result.canonicalPath}; backups: ${backups}`;
+}
+
+export async function executeCommand(layout: Layout, command: HeadlessCommand): Promise<string> {
+	switch (command.kind) {
+		case 'help':
+			return helpText;
+		case 'version':
+			return version;
+		case 'list': {
+			const result = await listSkills(layout);
+			const lines = result.skills.length === 0
+				? ['No Skills found.']
+				: [
+					'Skill\tClaude\tPi\tCodex',
+					...result.skills.map(skill => [
+						skill.name,
+						skill.states.claude,
+						skill.states.pi,
+						skill.states.codex,
+					].join('\t')),
+				];
+		for (const diagnostic of result.diagnostics) {
+			lines.push(`Warning: ${diagnostic.message} ${diagnostic.path}`);
+		}
+		return lines.join('\n');
+		}
+		case 'enable': {
+			const result = command.target === undefined
+				? await setSkillEnabled(layout, command.name, true)
+				: await setSkillEnabled(layout, command.name, true, [command.target]);
+			return formatToggle(result, true);
+		}
+		case 'disable': {
+			const result = command.target === undefined
+				? await setSkillEnabled(layout, command.name, false)
+				: await setSkillEnabled(layout, command.name, false, [command.target]);
+			return formatToggle(result, false);
+		}
+		case 'migrate': {
+			const plan = await planMigration(layout, command.name);
+			const result = await executeMigration(layout, plan, command.source);
+			return formatMigration(result);
+		}
 	}
 }
