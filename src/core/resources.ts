@@ -224,8 +224,7 @@ export async function setPluginEnabled(
 		throw new Error(`PLUGIN_NOT_FOUND: ${id}`);
 	}
 	if (current.capability !== 'native-headless' || current.provider !== 'claude') {
-		const instruction = current.provider === 'codex' ? 'codex /plugins' : 'pi config';
-		throw new Error(`INTERACTIVE_REQUIRED: use ${instruction} to change ${current.name}`);
+		throw new Error(`INTERACTIVE_REQUIRED: ${pluginInteractionInstruction(current)}`);
 	}
 	const arguments_ = ['plugin', enabled ? 'enable' : 'disable', current.name];
 	if (current.scope !== undefined && current.scope !== 'unknown') {
@@ -241,6 +240,12 @@ export async function setPluginEnabled(
 		throw new Error(`PLUGIN_STATE_UNCONFIRMED: expected ${expectedState}`);
 	}
 	return confirmed;
+}
+
+export function pluginInteractionInstruction(plugin: PluginResource): string {
+	return plugin.provider === 'codex'
+		? `Codex does not expose a headless plugin toggle. Run \`codex\`, enter \`/plugins\`, select \`${plugin.name}\`, then press Space.`
+		: `Pi does not expose a headless package-resource toggle. Run \`pi config\`, select \`${plugin.name}\`, then change its resource state.`;
 }
 
 function hookId(parts: ReadonlyArray<string>): string {

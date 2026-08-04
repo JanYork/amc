@@ -713,6 +713,12 @@ function resourceCell(value: string, width: number): string {
 	return fitted.padEnd(width);
 }
 
+function pluginInteractionSummary(plugin: PluginResource): string {
+	return plugin.provider === 'codex'
+		? 'Codex: run `codex`, then enter `/plugins` and toggle with Space.'
+		: 'Pi: run `pi config`, then change the package resource state.';
+}
+
 function ResourceView({
 	section,
 	resources,
@@ -810,6 +816,10 @@ function ResourceView({
 			return;
 		}
 		if (section === 'plugins' && input === ' ' && selected !== undefined && !('event' in selected)) {
+			if (selected.capability !== 'native-headless') {
+				setNotice({kind: 'info', text: pluginInteractionSummary(selected)});
+				return;
+			}
 			setBusy(true);
 			void setPluginEnabled(resources.context, resources.runtime, selected.id, selected.state !== 'enabled')
 				.then(plugin => {
@@ -853,7 +863,7 @@ function ResourceView({
 			<ThemedText color={palette.border}>{line}</ThemedText>
 			{selected !== undefined && ('event' in selected
 				? <Text wrap="truncate-end"><ThemedText color={palette.muted}>Source: </ThemedText>{selected.sourcePath}</Text>
-				: <Text wrap="truncate-end"><ThemedText color={palette.muted}>Details: </ThemedText>version {selected.version ?? 'unknown'} · scope {selected.scope ?? 'unknown'} · {selected.capability === 'native-headless' ? 'Space toggles' : `use ${selected.provider === 'codex' ? 'codex /plugins' : 'pi config'}`}</Text>)}
+				: <Text wrap="truncate-end"><ThemedText color={palette.muted}>Details: </ThemedText>version {selected.version ?? 'unknown'} · scope {selected.scope ?? 'unknown'} · {selected.capability === 'native-headless' ? 'Space toggles' : pluginInteractionSummary(selected)}</Text>)}
 			<Box><Box flexGrow={1}><ThemedText color={palette.muted}>{filtered.length === 0 ? 0 : start + 1}–{Math.min(filtered.length, start + visibleRows)} / {filtered.length}</ThemedText></Box><ThemedText color={palette.muted}>↑↓ move  / search  {section === 'hooks' ? 'e edit' : 'Space toggle'}  r refresh</ThemedText></Box>
 			<ThemedText color={noticeColor(notice.kind, palette)} wrap="truncate-end">{busy ? 'Working…' : notice.text}</ThemedText>
 		</Box>

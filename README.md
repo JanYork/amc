@@ -86,9 +86,9 @@ operation to one Agent. Headless commands never prompt: success exits `0`, a
 filesystem or state conflict exits `1`, and invalid usage exits `2`.
 
 Plugin inventory comes from each provider's public CLI. Claude Code plugins
-can be enabled or disabled directly; Codex and Pi return the required
-interactive command (`codex /plugins` or `pi config`) instead of rewriting
-private state. Hook inventory is read-only, and `hooks edit` opens the selected
+can be enabled or disabled directly. For Codex, run `codex` and enter `/plugins`;
+for Pi, run `pi config`. AMC reports those steps instead of rewriting private
+state. Hook inventory is read-only, and `hooks edit` opens the selected
 provider-owned source with `$VISUAL` or `$EDITOR`. AMC never executes a Hook
 while inspecting it; if neither variable is set, it reports how to configure one.
 

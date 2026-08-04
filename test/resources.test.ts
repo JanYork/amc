@@ -123,7 +123,7 @@ test('setPluginEnabled mutates only Claude and confirms the resulting inventory'
 			'codex plugin list --json': '{"installed":[{"id":"docs","enabled":false}]}',
 			'pi list': '',
 		}, unsupportedCalls), 'codex:docs', true),
-		/INTERACTIVE_REQUIRED.*codex \/plugins/u,
+		/INTERACTIVE_REQUIRED: Codex does not expose a headless plugin toggle\. Run `codex`, enter `\/plugins`, select `docs`, then press Space\./u,
 	);
 	assert.equal(unsupportedCalls.some(call => call.arguments_.includes('enable')), false);
 });
