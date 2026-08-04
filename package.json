@@ -1,0 +1,31 @@
+{
+  "name": "agent-management-cli",
+  "version": "0.1.0",
+  "description": "Manage shared Agent Skills from one local store.",
+  "type": "module",
+  "bin": {
+    "amc": "dist/src/main.js"
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "npm run build && node --test dist/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "ink": "7.1.1",
+    "react": "19.2.8"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.1",
+    "@types/react": "19.2.18",
+    "ink-testing-library": "4.0.0",
+    "typescript": "7.0.2"
+  }
+}
