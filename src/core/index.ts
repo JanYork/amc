@@ -68,6 +68,8 @@ export type ToggleResult = Readonly<{
 export type MigrationSource = Readonly<{
 	target: Target;
 	path: string;
+	contentPath: string;
+	kind: 'directory' | 'foreign-link';
 	fingerprint: string;
 }>;
 
@@ -137,6 +139,16 @@ type TargetEntry = Readonly<{
 	state: Exclude<TargetState, 'disabled'>;
 	visible: boolean;
 }>;
+
+type TargetObservation =
+	| Readonly<{state: 'disabled'}>
+	| Readonly<{state: 'enabled'}>
+	| Readonly<{
+		state: 'unmanaged';
+		kind: 'directory' | 'foreign-link';
+		contentPath: string;
+	}>
+	| Readonly<{state: 'conflict'; kind: 'broken-link' | 'invalid'}>;
 
 type TargetScan = Readonly<{
 	entries: ReadonlyMap<string, TargetEntry>;
@@ -227,6 +239,31 @@ async function isSkillDirectory(path: string): Promise<boolean> {
 	}
 }
 
+async function observeTargetPath(
+	path: string,
+	canonicalPath: string,
+	canonicalValid: boolean,
+): Promise<TargetObservation> {
+	const entry = await lstatIfPresent(path);
+	if (entry === undefined) {
+		return {state: 'disabled'};
+	}
+	if (entry.isSymbolicLink()) {
+		const contentPath = resolve(dirname(path), await readlink(path));
+		if (contentPath === resolve(canonicalPath) && canonicalValid) {
+			return {state: 'enabled'};
+		}
+		if (await isSkillDirectory(contentPath)) {
+			return {state: 'unmanaged', kind: 'foreign-link', contentPath};
+		}
+		return {state: 'conflict', kind: 'broken-link'};
+	}
+	if (entry.isDirectory() && await isSkillDirectory(path)) {
+		return {state: 'unmanaged', kind: 'directory', contentPath: path};
+	}
+	return {state: 'conflict', kind: 'invalid'};
+}
+
 async function scanCanonical(path: string): Promise<Readonly<{
 	names: ReadonlySet<string>;
 	diagnostics: ReadonlyArray<Diagnostic>;
@@ -256,29 +293,27 @@ async function scanTarget(
 
 	for (const entry of await readDirectory(path)) {
 		const entryPath = join(path, entry.name);
-		if (entry.isSymbolicLink()) {
-			const destination = resolve(dirname(entryPath), await readlink(entryPath));
-			const expected = resolve(canonicalPath, entry.name);
-			if (destination === expected && canonicalNames.has(entry.name)) {
-				entries.set(entry.name, {state: 'enabled', visible: true});
+		const observation = await observeTargetPath(
+			entryPath,
+			join(canonicalPath, entry.name),
+			canonicalNames.has(entry.name),
+		);
+		switch (observation.state) {
+			case 'disabled':
 				continue;
-			}
-
-			entries.set(entry.name, {
-				state: 'conflict',
-				visible: await isSkillDirectory(destination),
-			});
-			diagnostics.push({path: entryPath, message: 'Symlink is not managed by AMC.'});
-			continue;
+			case 'enabled':
+			case 'unmanaged':
+				entries.set(entry.name, {state: observation.state, visible: true});
+				continue;
+			case 'conflict':
+				entries.set(entry.name, {state: 'conflict', visible: false});
+				diagnostics.push({
+					path: entryPath,
+					message: observation.kind === 'broken-link'
+						? 'Target symlink does not resolve to a valid Skill directory.'
+						: 'Target entry is not a valid Skill directory.',
+				});
 		}
-
-		if (await isSkillDirectory(entryPath)) {
-			entries.set(entry.name, {state: 'unmanaged', visible: true});
-			continue;
-		}
-
-		entries.set(entry.name, {state: 'conflict', visible: false});
-		diagnostics.push({path: entryPath, message: 'Target entry is not a valid Skill directory.'});
 	}
 
 	return {entries, diagnostics};
@@ -338,15 +373,7 @@ function validateSkillName(name: string): void {
 }
 
 async function classifyTargetPath(path: string, canonicalPath: string): Promise<TargetState> {
-	const entry = await lstatIfPresent(path);
-	if (entry === undefined) {
-		return 'disabled';
-	}
-	if (entry.isSymbolicLink()) {
-		const destination = resolve(dirname(path), await readlink(path));
-		return destination === resolve(canonicalPath) ? 'enabled' : 'conflict';
-	}
-	return entry.isDirectory() && await isSkillDirectory(path) ? 'unmanaged' : 'conflict';
+	return (await observeTargetPath(path, canonicalPath, await isSkillDirectory(canonicalPath))).state;
 }
 
 async function isOwnedLink(path: string, canonicalPath: string): Promise<boolean> {
@@ -624,14 +651,20 @@ export async function planMigration(layout: Layout, name: string): Promise<Migra
 	const sources: MigrationSource[] = [];
 	for (const target of targets) {
 		const path = join(layout.targets[target], name);
-		const state = await classifyTargetPath(path, canonicalPath);
-		if (state === 'unmanaged') {
-			const fingerprint = await fingerprintDirectory(path);
-			targetSnapshots.push({target, state, path, fingerprint});
-			sources.push({target, path, fingerprint});
+		const observation = await observeTargetPath(path, canonicalPath, canonical.state === 'valid');
+		if (observation.state === 'unmanaged') {
+			const fingerprint = await fingerprintDirectory(observation.contentPath);
+			targetSnapshots.push({target, state: observation.state, path, fingerprint});
+			sources.push({
+				target,
+				path,
+				contentPath: observation.contentPath,
+				kind: observation.kind,
+				fingerprint,
+			});
 		} else {
-			targetSnapshots.push({target, state, path});
-			if (state === 'conflict') {
+			targetSnapshots.push({target, state: observation.state, path});
+			if (observation.state === 'conflict') {
 				blockers.push({
 					code: 'TARGET_CONFLICT',
 					path,
@@ -728,10 +761,22 @@ async function recoverMigration(
 			continue;
 		}
 		try {
-			await mkdir(originalPath);
-			await copyDirectoryContentsExclusive(backup.path, originalPath);
-			if (await fingerprintDirectory(originalPath) !== await fingerprintDirectory(backup.path)) {
-				throw new Error('Restored migration source fingerprint differs from backup.');
+			const backupEntry = await lstat(backup.path);
+			if (backupEntry.isSymbolicLink()) {
+				await mkdir(dirname(originalPath), {recursive: true});
+				const linkText = await readlink(backup.path);
+				await symlink(linkText, originalPath);
+				if (await readlink(originalPath) !== linkText) {
+					throw new Error('Restored migration link differs from backup.');
+				}
+			} else if (backupEntry.isDirectory()) {
+				await mkdir(originalPath);
+				await copyDirectoryContentsExclusive(backup.path, originalPath);
+				if (await fingerprintDirectory(originalPath) !== await fingerprintDirectory(backup.path)) {
+					throw new Error('Restored migration source fingerprint differs from backup.');
+				}
+			} else {
+				throw new Error('Migration backup is neither a directory nor a symbolic link.');
 			}
 		} catch {
 			recoveryPaths.push(backup.path, originalPath);
@@ -791,7 +836,7 @@ export async function executeMigration(
 	try {
 		if (selectedSource !== undefined) {
 			await mkdir(dirname(stagePath), {recursive: true});
-			await cp(selectedSource.path, stagePath, {
+			await cp(selectedSource.contentPath, stagePath, {
 				recursive: true,
 				force: false,
 				errorOnExist: true,

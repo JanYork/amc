@@ -65,12 +65,12 @@ test('listSkills returns the sorted union with independent target states', async
 		{
 			name: 'delta',
 			canonical: true,
-			states: {claude: 'conflict', pi: 'disabled', codex: 'disabled'},
+			states: {claude: 'unmanaged', pi: 'disabled', codex: 'disabled'},
 		},
 	]);
 	assert.deepEqual(
 		result.diagnostics.map(diagnostic => basename(diagnostic.path)).sort(),
-		['broken-only', 'delta', 'junk'],
+		['broken-only', 'junk'],
 	);
 	assert.equal(await pathExists(layout.amc.backups), false);
 });

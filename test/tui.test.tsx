@@ -57,7 +57,7 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	instance.stdin.write('q');
 });
 
-test('Ink TUI exposes divergence choice and non-destructive conflict errors', async () => {
+test('Ink TUI exposes divergence choice and blocks direct toggles of unmanaged entries', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
 	await writeSkill(layout.targets.claude, 'alpha', 'claude');
@@ -80,9 +80,9 @@ test('Ink TUI exposes divergence choice and non-destructive conflict errors', as
 	await mkdir(conflictLayout.targets.claude, {recursive: true});
 	await symlink(foreign, join(conflictLayout.targets.claude, 'delta'));
 	const conflicted = render(<App layout={conflictLayout}/>);
-	await waitForFrame(conflicted.lastFrame, /› delta/);
+	assert.match(await waitForFrame(conflicted.lastFrame, /› delta/), /› delta.*◇/);
 	conflicted.stdin.write(' ');
-	assert.match(await waitForFrame(conflicted.lastFrame, /TARGET_BLOCKED/), /!/);
+	assert.match(await waitForFrame(conflicted.lastFrame, /TARGET_BLOCKED/), /Target claude is unmanaged/);
 	assert.equal(await resolvedLink(join(conflictLayout.targets.claude, 'delta')), foreign);
 	conflicted.unmount();
 });

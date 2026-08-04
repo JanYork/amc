@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir, readFile, readlink, symlink, writeFile} from 'node:fs/promises';
+import {lstat, mkdir, readFile, readlink, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {
@@ -48,6 +48,57 @@ test('migration deduplicates identical unmanaged sources and backs up every orig
 	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), result.canonicalPath);
 	for (const backup of result.backups) {
 		assert.equal(await pathExists(join(backup.path, 'SKILL.md')), true);
+	}
+});
+
+test('migration adopts valid foreign links without mutating their resolved source', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const external = await writeSkill(join(home, 'external'), 'alpha', 'external source');
+	await writeFile(join(external, 'notes.txt'), 'external notes');
+	await symlink('notes.txt', join(external, 'notes-link'));
+	await mkdir(layout.targets.claude, {recursive: true});
+	await mkdir(layout.targets.pi, {recursive: true});
+	await symlink(external, join(layout.targets.claude, 'alpha'));
+	await symlink(external, join(layout.targets.pi, 'alpha'));
+	const beforeSkill = await lstat(join(external, 'SKILL.md'));
+
+	const plan = await planMigration(layout, 'alpha');
+
+	assert.deepEqual(plan.blockers, []);
+	assert.equal(plan.sourceRequired, false);
+	assert.deepEqual(plan.sources.map(source => ({
+		target: source.target,
+		path: source.path,
+		contentPath: source.contentPath,
+		kind: source.kind,
+	})), [
+		{
+			target: 'claude',
+			path: join(layout.targets.claude, 'alpha'),
+			contentPath: external,
+			kind: 'foreign-link',
+		},
+		{
+			target: 'pi',
+			path: join(layout.targets.pi, 'alpha'),
+			contentPath: external,
+			kind: 'foreign-link',
+		},
+	]);
+
+	const result = await executeMigration(layout, plan);
+	assert.equal(await readFile(join(result.canonicalPath, 'SKILL.md'), 'utf8'), 'external source');
+	assert.equal(await readlink(join(result.canonicalPath, 'notes-link')), 'notes.txt');
+	assert.equal(await resolvedLink(join(layout.targets.claude, 'alpha')), result.canonicalPath);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), result.canonicalPath);
+	assert.equal(await readFile(join(external, 'SKILL.md'), 'utf8'), 'external source');
+	assert.equal(await readFile(join(external, 'notes.txt'), 'utf8'), 'external notes');
+	assert.equal(await readlink(join(external, 'notes-link')), 'notes.txt');
+	assert.equal((await lstat(join(external, 'SKILL.md'))).ino, beforeSkill.ino);
+	for (const backup of result.backups) {
+		assert.equal((await lstat(backup.path)).isSymbolicLink(), true);
+		assert.equal(await resolvedLink(backup.path), external);
 	}
 });
 
@@ -107,9 +158,9 @@ test('migration reports target conflicts and writes nothing', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
 	const source = await writeSkill(layout.targets.claude, 'alpha');
-	const foreign = await writeSkill(join(home, 'foreign'), 'alpha');
+	const missing = join(home, 'missing', 'alpha');
 	await mkdir(layout.targets.pi, {recursive: true});
-	await symlink(foreign, join(layout.targets.pi, 'alpha'));
+	await symlink(missing, join(layout.targets.pi, 'alpha'));
 
 	const plan = await planMigration(layout, 'alpha');
 
@@ -119,7 +170,7 @@ test('migration reports target conflicts and writes nothing', async () => {
 		code: 'MIGRATION_BLOCKED',
 	});
 	assert.equal(await pathExists(join(source, 'SKILL.md')), true);
-	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), foreign);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), missing);
 	assert.equal(await pathExists(layout.amc.backups), false);
 });
 
