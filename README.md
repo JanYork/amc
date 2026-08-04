@@ -106,6 +106,18 @@ only `q` remains active until the terminal is resized.
 The bordered table highlights the selected scope and row. States use green
 `●` enabled, dim `○` disabled, yellow `◇` unmanaged, and red `!` conflict.
 
+AMC detects dark and light terminal backgrounds when `COLORFGBG` is available.
+Override detection when needed:
+
+```bash
+AMC_THEME=dark amc
+AMC_THEME=light amc
+AMC_THEME=mono amc
+```
+
+Valid themes are `dark`, `light`, and `mono`. `NO_COLOR` always selects mono,
+and redirected command output never contains ANSI color escapes.
+
 ## Filesystem layout
 
 ```text

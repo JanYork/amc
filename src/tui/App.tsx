@@ -110,14 +110,10 @@ function StateMark({
 	if (!focused) {
 		return <ThemedText color={stateColor(state, palette)}>{symbol}</ThemedText>;
 	}
-	if (presentation.theme === 'mono') {
-		return <Text bold underline>{state === 'enabled' ? '◉' : symbol}</Text>;
-	}
 	return (
-		<Text>
-			<ThemedText color={stateColor(state, palette)}>{symbol}</ThemedText>
-			<ThemedText color={palette.accent}>⃝</ThemedText>
-		</Text>
+		<ThemedText bold underline color={stateColor(state, palette)}>
+			{state === 'enabled' ? '◉' : symbol}
+		</ThemedText>
 	);
 }
 

@@ -63,7 +63,9 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	assert.match(list, /└.*┴.*┘/);
 	assert.match(list, /› alpha/);
 	instance.stdin.write('\u001B[C');
-	assert.match(await waitForFrame(instance.lastFrame, /Scope: Claude/), /●⃝/u);
+	const focused = await waitForFrame(instance.lastFrame, /Scope: Claude/);
+	assert.match(focused, /◉/u);
+	assert.doesNotMatch(focused, /⃝/u);
 	instance.stdin.write('\u001B[D');
 	instance.stdin.write('j');
 	assert.match(await waitForFrame(instance.lastFrame, /› beta/), /\?/);
