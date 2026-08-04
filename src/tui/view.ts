@@ -40,14 +40,14 @@ export function layoutForTerminal(columns: number, rows: number): TerminalLayout
 
 	const compact = columns < 68;
 	const showLegend = rows > minimumRows;
-	const showDetails = rows >= 14;
+	const showDetails = rows >= 16;
 	const targetWidth = compact ? 5 : 10;
 	return {
 		kind: 'ready',
 		compact,
 		showLegend,
 		showDetails,
-		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - (showLegend ? 10 : 9) - (showDetails ? 2 : 0))),
+		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - (showLegend ? 10 : 9) - (showDetails ? 4 : 0))),
 		skillWidth: Math.max(1, columns - 13 - (targetWidth * 3)),
 		targetWidth,
 	};

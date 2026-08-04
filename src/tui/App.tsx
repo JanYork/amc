@@ -649,10 +649,16 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 					))}
 					<TableBorder position="bottom" terminalLayout={terminalLayout} palette={palette}/>
 					{terminalLayout.showDetails && selectedSkill !== undefined && (
-						<>
-							<Box><ThemedText bold color={palette.accent}>Description: </ThemedText><Text wrap="truncate-end">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.description : 'Loading…'}</Text></Box>
-							<Box><ThemedText color={palette.muted}>Source: </ThemedText><ThemedText color={palette.muted} wrap="truncate-end">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.sourcePath : 'Loading…'}</ThemedText></Box>
-						</>
+						<Box flexDirection="column" width={dimensions.columns}>
+							<ThemedText bold color={palette.accent}>Description</ThemedText>
+							<Box height={2} overflowY="hidden" width={dimensions.columns}>
+								<Text wrap="wrap">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.description : 'Loading…'}</Text>
+							</Box>
+							<Box width={dimensions.columns}>
+								<ThemedText color={palette.muted}>Source: </ThemedText>
+								<Box flexGrow={1}><ThemedText color={palette.muted} wrap="truncate-end">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.sourcePath : 'Loading…'}</ThemedText></Box>
+							</Box>
+						</Box>
 					)}
 					<Box>
 						<Box flexGrow={1}><ThemedText color={palette.muted}>{visibleStart}–{visibleEnd} / {filteredTotal}{hasRowsAbove ? '  ↑ more' : ''}{hasRowsBelow ? '  ↓ more' : ''}</ThemedText></Box>

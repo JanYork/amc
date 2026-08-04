@@ -51,11 +51,11 @@ Creates a concise implementation plan.
 		<App layout={layout} presentation={darkPresentation} windowSize={{columns: 100, rows: 16}}/>,
 	);
 
-	const frame = await waitForFrame(instance.lastFrame, /Description: Reviews code/);
+	const frame = await waitForFrame(instance.lastFrame, /Description\nReviews code/);
 	assert.match(frame, /Source: .*alpha\/SKILL\.md/);
 	assert.ok(frame.split('\n').length <= 16, frame);
 	instance.stdin.write('j');
-	const nextFrame = await waitForFrame(instance.lastFrame, /Description: Creates a concise/);
+	const nextFrame = await waitForFrame(instance.lastFrame, /Description\nCreates a concise/);
 	assert.match(nextFrame, /Source: .*beta\/SKILL\.md/);
 	instance.unmount();
 });
@@ -69,11 +69,35 @@ test('Ink TUI follows the selected scope for divergent Skill details', async () 
 		<App layout={layout} presentation={darkPresentation} windowSize={{columns: 100, rows: 16}}/>,
 	);
 
-	await waitForFrame(instance.lastFrame, /Description: Claude description/);
+	await waitForFrame(instance.lastFrame, /Description\nClaude description/);
 	instance.stdin.write('\u001B[C\u001B[C');
-	const piFrame = await waitForFrame(instance.lastFrame, /Description: Pi description/);
+	const piFrame = await waitForFrame(instance.lastFrame, /Description\nPi description/);
 	assert.match(piFrame, /Scope: Pi/);
-	assert.match(piFrame, /Source:.*\.pi\/agent\/skills\/alpha\/SKILL/);
+	assert.match(piFrame, /Source:.*\.pi\/agent\/skills\/alpha\//);
+	instance.unmount();
+});
+
+test('Ink TUI wraps a long description below its label without exceeding the viewport', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'alpha', `---
+name: alpha
+description: Run read-only deep repository analysis and return a ranked synthesis with explicit confidence.
+---
+`);
+	const instance = render(
+		<App layout={layout} presentation={darkPresentation} windowSize={{columns: 60, rows: 16}}/>,
+	);
+
+	const frame = await waitForFrame(instance.lastFrame, /synthesis with explicit/);
+	const lines = frame.split('\n');
+	const labelIndex = lines.findIndex(line => line.trim() === 'Description');
+	assert.notEqual(labelIndex, -1, frame);
+	assert.match(lines[labelIndex + 1] ?? '', /^Run read-only deep repository analysis/u);
+	assert.match(lines[labelIndex + 1] ?? '', /ranked$/u);
+	assert.match(lines[labelIndex + 2] ?? '', /^synthesis with explicit/u);
+	assert.match(lines[labelIndex + 3] ?? '', /^Source:/u);
+	assert.ok(lines.length <= 16, frame);
 	instance.unmount();
 });
 
