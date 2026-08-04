@@ -15,6 +15,7 @@ export type TerminalLayout =
 	| Readonly<{
 		kind: 'ready';
 		compact: boolean;
+		showLegend: boolean;
 		visibleRows: number;
 		skillWidth: number;
 		targetWidth: number;
@@ -29,7 +30,6 @@ export type VisibleWindow = Readonly<{
 
 const minimumColumns = 44;
 const minimumRows = 10;
-const reservedRows = 7;
 const maximumVisibleRows = 20;
 
 export function layoutForTerminal(columns: number, rows: number): TerminalLayout {
@@ -38,12 +38,14 @@ export function layoutForTerminal(columns: number, rows: number): TerminalLayout
 	}
 
 	const compact = columns < 68;
+	const showLegend = rows > minimumRows;
 	const targetWidth = compact ? 5 : 10;
 	return {
 		kind: 'ready',
 		compact,
-		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - reservedRows)),
-		skillWidth: Math.max(1, columns - 2 - (targetWidth * 3)),
+		showLegend,
+		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - (showLegend ? 10 : 9))),
+		skillWidth: Math.max(1, columns - 13 - (targetWidth * 3)),
 		targetWidth,
 	};
 }

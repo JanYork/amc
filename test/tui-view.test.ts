@@ -25,15 +25,18 @@ test('terminal layout bounds rows and switches compact/minimum modes', () => {
 	assert.equal(compact.kind, 'ready');
 	if (compact.kind === 'ready') {
 		assert.equal(compact.compact, true);
-		assert.equal(compact.visibleRows, 3);
-		assert.equal(compact.skillWidth, 27);
+		assert.equal(compact.visibleRows, 1);
+		assert.equal(compact.skillWidth, 16);
+		assert.equal(compact.showLegend, false);
 	}
 
 	const normal = layoutForTerminal(80, 24);
 	assert.equal(normal.kind, 'ready');
 	if (normal.kind === 'ready') {
 		assert.equal(normal.compact, false);
-		assert.equal(normal.visibleRows, 17);
+		assert.equal(normal.visibleRows, 14);
+		assert.equal(normal.skillWidth, 37);
+		assert.equal(normal.showLegend, true);
 	}
 
 	const tall = layoutForTerminal(120, 80);

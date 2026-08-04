@@ -39,7 +39,10 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	const instance = render(<App layout={layout}/>);
 
 	const list = await waitForFrame(instance.lastFrame, /alpha/);
-	assert.match(list, /Skill\s+Claude\s+Pi\s+Codex/);
+	assert.match(list, /Skill.*Claude.*Pi.*Codex/);
+	assert.match(list, /┌.*┬.*┐/);
+	assert.match(list, /├.*┼.*┤/);
+	assert.match(list, /└.*┴.*┘/);
 	assert.match(list, /› alpha/);
 	instance.stdin.write('j');
 	assert.match(await waitForFrame(instance.lastFrame, /› beta/), /\?/);
@@ -96,22 +99,23 @@ test('Ink TUI keeps a large list inside the terminal viewport while arrows and p
 	const instance = render(<App layout={layout} windowSize={{columns: 80, rows: 12}}/>);
 
 	const first = await waitForFrame(instance.lastFrame, /› item-00/);
-	assert.equal(first.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 5);
-	assert.match(first, /1–5 \/ 30/);
+	assert.equal(first.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 2);
+	assert.match(first, /1–2 \/ 30/);
+	assert.match(first, /┌.*┬.*┐/);
 
 	for (let step = 0; step < 6; step += 1) {
 		instance.stdin.write('\u001B[B');
 	}
 	const scrolled = await waitForFrame(instance.lastFrame, /› item-06/);
-	assert.equal(scrolled.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 5);
+	assert.equal(scrolled.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 2);
 	assert.doesNotMatch(scrolled, /item-00/);
 
 	instance.stdin.write('\u001B[6~');
-	assert.match(await waitForFrame(instance.lastFrame, /› item-11/), /↓ more/);
+	assert.match(await waitForFrame(instance.lastFrame, /› item-08/), /↓ more/);
 	instance.stdin.write('\u001B[H');
-	assert.match(await waitForFrame(instance.lastFrame, /› item-00/), /1–5 \/ 30/);
+	assert.match(await waitForFrame(instance.lastFrame, /› item-00/), /1–2 \/ 30/);
 	instance.stdin.write('\u001B[F');
-	assert.match(await waitForFrame(instance.lastFrame, /› item-29/), /26–30 \/ 30/);
+	assert.match(await waitForFrame(instance.lastFrame, /› item-29/), /29–30 \/ 30/);
 	instance.unmount();
 });
 
@@ -129,7 +133,7 @@ test('Ink TUI supports live search, clear, scope arrows, and help without growin
 	instance.stdin.write('item-2');
 	const searched = await waitForFrame(instance.lastFrame, /› item-20/);
 	assert.match(searched, /Search: item-2/);
-	assert.match(searched, /1–5 \/ 10/);
+	assert.match(searched, /1–2 \/ 10/);
 	assert.ok(searched.split('\n').length <= 12, searched);
 
 	instance.stdin.write('\r');

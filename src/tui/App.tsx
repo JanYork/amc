@@ -61,14 +61,88 @@ function targetFromInput(input: string): Target | undefined {
 function StateMark({state, focused}: Readonly<{state: TargetState; focused: boolean}>): React.JSX.Element {
 	switch (state) {
 		case 'enabled':
-			return <Text color="green" inverse={focused}>●</Text>;
+			return <Text bold={focused} color="green" inverse={focused}>●</Text>;
 		case 'disabled':
-			return <Text dimColor inverse={focused}>○</Text>;
+			return <Text bold={focused} dimColor inverse={focused}>○</Text>;
 		case 'unmanaged':
-			return <Text color="yellow" inverse={focused}>◇</Text>;
+			return <Text bold={focused} color="yellow" inverse={focused}>◇</Text>;
 		case 'conflict':
-			return <Text color="red" inverse={focused}>!</Text>;
+			return <Text bold={focused} color="red" inverse={focused}>!</Text>;
 	}
+}
+
+function TableBorder({
+	terminalLayout,
+	position,
+}: Readonly<{
+	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+	position: 'top' | 'middle' | 'bottom';
+}>): React.JSX.Element {
+	const [left, separator, right] = position === 'top'
+		? ['┌', '┬', '┐']
+		: position === 'middle'
+			? ['├', '┼', '┤']
+			: ['└', '┴', '┘'];
+	const widths = [
+		terminalLayout.skillWidth,
+		terminalLayout.targetWidth,
+		terminalLayout.targetWidth,
+		terminalLayout.targetWidth,
+	];
+	return (
+		<Text color="cyan" dimColor>
+			{left}{widths.map(width => '─'.repeat(width + 2)).join(separator)}{right}
+		</Text>
+	);
+}
+
+function TableHeader({
+	scope,
+	terminalLayout,
+}: Readonly<{
+	scope: ActionScope;
+	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+}>): React.JSX.Element {
+	return (
+		<Box>
+			<Text color="cyan" dimColor>│ </Text>
+			<Box width={terminalLayout.skillWidth}>
+				<Text bold color="cyan" inverse={scope === 'all'} wrap="truncate-end">
+					{'  Skill'.padEnd(terminalLayout.skillWidth)}
+				</Text>
+			</Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}>
+				<Text bold color="cyan" inverse={scope === 'claude'}>{terminalLayout.compact ? 'C' : 'Claude'}</Text>
+			</Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}>
+				<Text bold color="cyan" inverse={scope === 'pi'}>{terminalLayout.compact ? 'P' : 'Pi'}</Text>
+			</Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}>
+				<Text bold color="cyan" inverse={scope === 'codex'}>{terminalLayout.compact ? 'X' : 'Codex'}</Text>
+			</Box>
+			<Text color="cyan" dimColor> │</Text>
+		</Box>
+	);
+}
+
+function TableMessageRow({
+	message,
+	terminalLayout,
+}: Readonly<{
+	message: string;
+	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+}>): React.JSX.Element {
+	const width = terminalLayout.skillWidth + (terminalLayout.targetWidth * 3) + 9;
+	return (
+		<Box>
+			<Text color="cyan" dimColor>│ </Text>
+			<Box width={width}><Text dimColor wrap="truncate-end">{message.padEnd(width)}</Text></Box>
+			<Text color="cyan" dimColor> │</Text>
+		</Box>
+	);
 }
 
 function SkillRow({
@@ -84,14 +158,19 @@ function SkillRow({
 }>): React.JSX.Element {
 	return (
 		<Box>
-			<Box width={terminalLayout.skillWidth + 2}>
-				<Text inverse={selected && scope === 'all'} wrap="truncate-end">
-					{selected ? '› ' : '  '}{skill.name}
+			<Text color="cyan" dimColor>│ </Text>
+			<Box width={terminalLayout.skillWidth}>
+				<Text bold={selected} color={selected ? 'cyan' : 'white'} inverse={selected && scope === 'all'} wrap="truncate-end">
+					{`${selected ? '› ' : '  '}${skill.name}`.padEnd(terminalLayout.skillWidth)}
 				</Text>
 			</Box>
-			<Box width={terminalLayout.targetWidth}><StateMark state={skill.states.claude} focused={selected && scope === 'claude'}/></Box>
-			<Box width={terminalLayout.targetWidth}><StateMark state={skill.states.pi} focused={selected && scope === 'pi'}/></Box>
-			<Box width={terminalLayout.targetWidth}><StateMark state={skill.states.codex} focused={selected && scope === 'codex'}/></Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.claude} focused={selected && scope === 'claude'}/></Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.pi} focused={selected && scope === 'pi'}/></Box>
+			<Text color="cyan" dimColor> │ </Text>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.codex} focused={selected && scope === 'codex'}/></Box>
+			<Text color="cyan" dimColor> │</Text>
 		</Box>
 	);
 }
@@ -458,22 +537,23 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 			</Box>
 			<Box>
 				<Box flexGrow={1}>
-					<Text wrap="truncate-end">Search: {query.length === 0 ? '—' : query}{searching ? '█' : ''}</Text>
+					<Text wrap="truncate-end">Search: </Text>
+					<Text bold={searching} color={query.length === 0 ? 'white' : 'yellow'} wrap="truncate-end">
+						{query.length === 0 ? '—' : query}{searching ? '█' : ''}
+					</Text>
 				</Box>
-				<Text>Scope: {scopeLabel(scope)}</Text>
+				<Text dimColor>Scope: </Text><Text bold color="cyan">{scopeLabel(scope)}</Text>
 			</Box>
 			{helpOpen ? <HelpPanel/> : (
 				<Box flexDirection="column">
-					<Box>
-						<Box width={terminalLayout.skillWidth + 2}>
-							<Text bold inverse={scope === 'all'} wrap="truncate-end">  Skill</Text>
-						</Box>
-						<Box width={terminalLayout.targetWidth}><Text bold inverse={scope === 'claude'}>{terminalLayout.compact ? 'C' : 'Claude'}</Text></Box>
-						<Box width={terminalLayout.targetWidth}><Text bold inverse={scope === 'pi'}>{terminalLayout.compact ? 'P' : 'Pi'}</Text></Box>
-						<Box width={terminalLayout.targetWidth}><Text bold inverse={scope === 'codex'}>{terminalLayout.compact ? 'X' : 'Codex'}</Text></Box>
-					</Box>
-					{skills === undefined ? <Text>Loading Skills…</Text> : filteredSkills?.length === 0 ? (
-						<Text>{query.length === 0 ? 'No Skills found.' : 'No Skills match the current search.'}</Text>
+					<TableBorder position="top" terminalLayout={terminalLayout}/>
+					<TableHeader scope={scope} terminalLayout={terminalLayout}/>
+					<TableBorder position="middle" terminalLayout={terminalLayout}/>
+					{skills === undefined ? <TableMessageRow message="Loading Skills…" terminalLayout={terminalLayout}/> : filteredSkills?.length === 0 ? (
+						<TableMessageRow
+							message={query.length === 0 ? 'No Skills found.' : 'No Skills match the current search.'}
+							terminalLayout={terminalLayout}
+						/>
 					) : currentWindow?.rows.map(skill => (
 						<SkillRow
 							key={skill.name}
@@ -483,6 +563,7 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 							terminalLayout={terminalLayout}
 						/>
 					))}
+					<TableBorder position="bottom" terminalLayout={terminalLayout}/>
 					<Box>
 						<Box flexGrow={1}><Text dimColor>{hasRowsAbove ? '↑ more' : ''}{hasRowsAbove && hasRowsBelow ? '  ' : ''}{hasRowsBelow ? '↓ more' : ''}</Text></Box>
 						<Text dimColor>{visibleStart}–{visibleEnd} / {filteredTotal}</Text>
@@ -492,7 +573,11 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 			<Box>
 				<Text color={noticeColor(status.kind)} wrap="truncate-end">{status.text}</Text>
 			</Box>
-			<Box><Text dimColor wrap="truncate-end">● enabled  ○ disabled  ◇ unmanaged  ! conflict</Text></Box>
+			{terminalLayout.showLegend && (
+				<Box>
+					<Text color="green">● enabled</Text><Text dimColor>  ○ disabled  </Text><Text color="yellow">◇ unmanaged</Text><Text color="red">  ! conflict</Text>
+				</Box>
+			)}
 			<Box>
 				<Text dimColor wrap="truncate-end">↑↓ move  ←→ scope  Space toggle  / search  ? help  q quit</Text>
 			</Box>

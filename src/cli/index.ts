@@ -52,7 +52,8 @@ Usage:
   amc
   amc list [--page <n>] [--limit <1-100>] [--search <text>]
   amc list --all [--search <text>]
-  amc list --diagnostics [--page <n>] [--limit <1-100>] [--all]
+  amc list --diagnostics [--page <n>] [--limit <1-100>] [--search <text>]
+  amc list --diagnostics --all [--search <text>]
   amc enable <skill> [--target claude|pi|codex]
   amc disable <skill> [--target claude|pi|codex]
   amc migrate <skill> [--source claude|pi|codex]
@@ -400,8 +401,64 @@ function fit(value: string, width: number, truncate: boolean): string {
 	return pad(truncate ? truncateEnd(value, width) : value, width);
 }
 
-function stateText(state: TargetState): string {
-	return state;
+function ansi(value: string, code: string, output: OutputContext): string {
+	return output.isTTY ? `\u001B[${code}m${value}\u001B[0m` : value;
+}
+
+function stateText(state: TargetState, compact: boolean): string {
+	if (!compact) {
+		return state;
+	}
+	switch (state) {
+		case 'enabled':
+			return '●';
+		case 'disabled':
+			return '○';
+		case 'unmanaged':
+			return '◇';
+		case 'conflict':
+			return '!';
+	}
+}
+
+function stateAnsiCode(state: TargetState): string {
+	switch (state) {
+		case 'enabled':
+			return '32';
+		case 'disabled':
+			return '2';
+		case 'unmanaged':
+			return '33';
+		case 'conflict':
+			return '31';
+	}
+}
+
+function tableBorder(
+	widths: ReadonlyArray<number>,
+	characters: Readonly<{left: string; separator: string; right: string}>,
+	output: OutputContext,
+): string {
+	return ansi(
+		`${characters.left}${widths.map(width => '─'.repeat(width + 2)).join(characters.separator)}${characters.right}`,
+		'2;36',
+		output,
+	);
+}
+
+function tableRow(
+	values: ReadonlyArray<string>,
+	widths: ReadonlyArray<number>,
+	codes: ReadonlyArray<string | undefined>,
+	output: OutputContext,
+): string {
+	const cells = values.map((value, index) => {
+		const width = widths[index] ?? characterLength(value);
+		const cell = fit(value, width, output.isTTY);
+		const code = codes[index];
+		return code === undefined ? cell : ansi(cell, code, output);
+	});
+	return `│ ${cells.join(' │ ')} │`;
 }
 
 function skillTable(skills: ReadonlyArray<Skill>, output: OutputContext): ReadonlyArray<string> {
@@ -413,30 +470,39 @@ function skillTable(skills: ReadonlyArray<Skill>, output: OutputContext): Readon
 		(longest, skill) => Math.max(longest, characterLength(skill.name)),
 		characterLength('SKILL'),
 	);
-	const targetWidth = 9;
-	const fixedWidth = (targetWidth * 3) + 6;
+	const compact = output.isTTY && output.columns < 68;
+	const targetWidth = compact ? 5 : 9;
+	const fixedWidth = (targetWidth * 3) + 13;
 	const skillWidth = output.isTTY
 		? Math.max(5, Math.min(longestName, Math.max(5, output.columns - fixedWidth)))
 		: longestName;
-	const compact = output.isTTY && output.columns < 68;
 	const headers = compact ? ['C', 'P', 'X'] : ['CLAUDE', 'PI', 'CODEX'];
+	const widths = [skillWidth, targetWidth, targetWidth, targetWidth];
 	const lines = [
-		[
-			fit('SKILL', skillWidth, output.isTTY),
-			fit(headers[0] ?? '', targetWidth, false),
-			fit(headers[1] ?? '', targetWidth, false),
-			fit(headers[2] ?? '', targetWidth, false),
-		].join('  ').trimEnd(),
+		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
+		tableRow(['SKILL', headers[0] ?? '', headers[1] ?? '', headers[2] ?? ''], widths, ['1;36', '1;36', '1;36', '1;36'], output),
+		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
 	];
 
 	for (const skill of skills) {
-		lines.push([
-			fit(skill.name, skillWidth, output.isTTY),
-			fit(stateText(skill.states.claude), targetWidth, false),
-			fit(stateText(skill.states.pi), targetWidth, false),
-			fit(stateText(skill.states.codex), targetWidth, false),
-		].join('  ').trimEnd());
+		lines.push(tableRow(
+			[
+				skill.name,
+				stateText(skill.states.claude, compact),
+				stateText(skill.states.pi, compact),
+				stateText(skill.states.codex, compact),
+			],
+			widths,
+			[
+				undefined,
+				stateAnsiCode(skill.states.claude),
+				stateAnsiCode(skill.states.pi),
+				stateAnsiCode(skill.states.codex),
+			],
+			output,
+		));
 	}
+	lines.push(tableBorder(widths, {left: '└', separator: '┴', right: '┘'}, output));
 
 	return lines;
 }
@@ -461,19 +527,24 @@ function diagnosticTable(
 		? Math.max(12, Math.min(longestMessage, Math.floor(output.columns * 0.4)))
 		: longestMessage;
 	const pathWidth = output.isTTY
-		? Math.max(5, output.columns - messageWidth - 2)
+		? Math.max(5, output.columns - messageWidth - 7)
 		: longestPath;
-	const lines = [[
-		fit('MESSAGE', messageWidth, output.isTTY),
-		fit('PATH', pathWidth, output.isTTY),
-	].join('  ').trimEnd()];
+	const widths = [messageWidth, pathWidth];
+	const lines = [
+		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
+		tableRow(['MESSAGE', 'PATH'], widths, ['1;36', '1;36'], output),
+		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
+	];
 
 	for (const diagnostic of diagnostics) {
-		lines.push([
-			fit(diagnostic.message, messageWidth, output.isTTY),
-			fit(diagnostic.path, pathWidth, output.isTTY),
-		].join('  ').trimEnd());
+		lines.push(tableRow(
+			[diagnostic.message, diagnostic.path],
+			widths,
+			['31', undefined],
+			output,
+		));
 	}
+	lines.push(tableBorder(widths, {left: '└', separator: '┴', right: '┘'}, output));
 
 	return lines;
 }
@@ -512,7 +583,7 @@ function formatList(
 			? `${filtered.length} total`
 			: `${filtered.length} matches · ${result.diagnostics.length} total`;
 		return [
-			`AMC Diagnostics · ${count}`,
+			ansi(`AMC Diagnostics · ${count}`, '1;36', output),
 			'',
 			...diagnosticTable(page.rows, output),
 			'',
@@ -526,7 +597,7 @@ function formatList(
 		? `${filtered.length} total`
 		: `${filtered.length} matches · ${result.skills.length} total`;
 	return [
-		`AMC Skills · ${count} · ${warningLabel(result.diagnostics.length)}`,
+		ansi(`AMC Skills · ${count} · ${warningLabel(result.diagnostics.length)}`, '1;36', output),
 		'',
 		...skillTable(page.rows, output),
 		'',

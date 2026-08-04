@@ -32,9 +32,12 @@ test('headless list formats the exact core state without creating stores', async
 	}), [
 		'AMC Skills · 2 total · 0 warnings',
 		'',
-		'SKILL  CLAUDE     PI         CODEX',
-		'alpha  disabled   disabled   disabled',
-		'beta   disabled   unmanaged  disabled',
+		'┌───────┬───────────┬───────────┬───────────┐',
+		'│ SKILL │ CLAUDE    │ PI        │ CODEX     │',
+		'├───────┼───────────┼───────────┼───────────┤',
+		'│ alpha │ disabled  │ disabled  │ disabled  │',
+		'│ beta  │ disabled  │ unmanaged │ disabled  │',
+		'└───────┴───────────┴───────────┴───────────┘',
 		'',
 		'Showing 1–2 of 2 · Page 1/1',
 	].join('\n'));
@@ -60,7 +63,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		diagnostics: false,
 	}, {isTTY: false, columns: 80});
 	assert.match(firstPage, /^AMC Skills · 25 total · 1 warning/m);
-	assert.equal(firstPage.split('\n').filter(line => line.startsWith('skill-')).length, 20);
+	assert.equal(firstPage.split('\n').filter(line => line.startsWith('│ skill-')).length, 20);
 	assert.match(firstPage, /Showing 1–20 of 25 · Page 1\/2/);
 	assert.match(firstPage, /Next: amc list --page 2/);
 	assert.doesNotMatch(firstPage, /skill-21/);
@@ -74,7 +77,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		search: undefined,
 		diagnostics: false,
 	}, {isTTY: false, columns: 80});
-	assert.equal(secondPage.split('\n').filter(line => line.startsWith('skill-')).length, 5);
+	assert.equal(secondPage.split('\n').filter(line => line.startsWith('│ skill-')).length, 5);
 	assert.match(secondPage, /skill-21/);
 	assert.match(secondPage, /Showing 21–25 of 25 · Page 2\/2/);
 
@@ -86,7 +89,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		search: 'SKILL-2',
 		diagnostics: false,
 	}, {isTTY: false, columns: 80});
-	assert.equal(searched.split('\n').filter(line => line.startsWith('skill-')).length, 6);
+	assert.equal(searched.split('\n').filter(line => line.startsWith('│ skill-')).length, 6);
 	assert.doesNotMatch(searched, /skill-19/);
 
 	const diagnostics = await executeCommand(layout, {
@@ -118,7 +121,26 @@ test('redirected list preserves complete long names without ANSI', async () => {
 		diagnostics: false,
 	}, {isTTY: false, columns: 44});
 	assert.match(output, new RegExp(longName, 'u'));
+	assert.match(output, /┌.*┬.*┐/u);
 	assert.doesNotMatch(output, /\u001B\[/u);
+});
+
+test('interactive list uses table borders and ANSI emphasis', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.targets.claude, 'alpha');
+
+	const output = await executeCommand(layout, {
+		kind: 'list',
+		page: 1,
+		limit: 20,
+		all: false,
+		search: undefined,
+		diagnostics: false,
+	}, {isTTY: true, columns: 80});
+
+	assert.match(output, /┌.*┬.*┐/u);
+	assert.match(output, /\u001B\[/u);
 });
 
 test('headless bulk dry run caps the human preview without hiding totals', async () => {
@@ -239,5 +261,5 @@ test('compiled headless binary completes migrate, disable, enable, and list end 
 
 	const listed = runBinary(home, ['list']);
 	assert.equal(listed.status, 0, listed.stderr);
-	assert.match(listed.stdout, /alpha\s+disabled\s+disabled\s+enabled/);
+	assert.match(listed.stdout, /│ alpha\s+│ disabled\s+│ disabled\s+│ enabled/);
 });

@@ -22,45 +22,61 @@ with `node dist/src/main.js` after `npm run build`.
 
 ## Start safely
 
-First inspect the current state. Listing is read-only and does not create AMC
-directories:
+First inspect the current state. Both commands are read-only:
 
 ```bash
 amc list
+amc migrate --all
 ```
 
-Existing Skills remain where they are until an explicit migration command:
+`amc list` shows 20 rows by default. `amc migrate --all` prints a bounded dry
+run with ready, managed, divergent, blocked, and warning counts. Neither command
+creates or moves anything.
+
+Apply every unambiguous Skill only after reviewing that dry run:
 
 ```bash
-amc migrate writing-text
+amc migrate --all --yes
 ```
 
-When valid copies with the same name differ, AMC stops and requires the copy
-that should become canonical:
+Bulk apply skips differing copies. Resolve each one explicitly:
 
 ```bash
 amc migrate writing-text --source claude
 ```
 
-AMC moves every adopted original into a unique backup under `~/.amc/backups/`,
-then links that Agent to `~/.amc/skills/<skill>`.
+Every Skill is its own transaction. AMC stops on the first unexpected failure,
+keeps completed Skills managed, lists pending names, and supports rerunning from
+fresh filesystem state. Every replaced entry is preserved under a reported
+per-Skill root in `~/.amc/backups/`.
 
 ## Commands
 
 ```text
 amc
-amc list
+amc list [--page <n>] [--limit <1-100>] [--search <text>]
+amc list --all [--search <text>]
+amc list --diagnostics [--page <n>] [--limit <1-100>] [--search <text>]
+amc list --diagnostics --all [--search <text>]
 amc enable <skill>
 amc enable <skill> --target claude|pi|codex
 amc disable <skill>
 amc disable <skill> --target claude|pi|codex
 amc migrate <skill>
 amc migrate <skill> --source claude|pi|codex
+amc migrate --all
+amc migrate --all --yes
 amc --help
 amc --version
 ```
 
-Enable and disable target all three Agents by default. `--target` narrows the
+`list` is an aligned table with 20 rows per page by default; use `--all` only
+when intentionally producing the complete stream. Diagnostics are a separate,
+paginated view. Search is case-insensitive; Skill mode searches names, while
+diagnostic mode searches messages and paths. Redirected output contains full
+names and no terminal color codes.
+
+Enable and disable target all three Agents by default. `--target` narrows an
 operation to one Agent. Headless commands never prompt: success exits `0`, a
 filesystem or state conflict exits `1`, and invalid usage exits `2`.
 
@@ -69,13 +85,26 @@ filesystem or state conflict exits `1`, and invalid usage exits `2`.
 | Key | Action |
 | --- | --- |
 | `↑` / `↓`, `j` / `k` | Move selection |
-| `Space` | Toggle the selected Skill for all Agents |
+| `Page Up` / `Page Down` | Move one visible page |
+| `Home` / `End` | Jump to first or last result |
+| `←` / `→` | Choose All, Claude, Pi, or Codex action scope |
+| `Space` | Toggle the selected Skill in the current scope |
 | `1`, `2`, `3` | Toggle Claude, Pi, or Codex |
-| `m` | Review and confirm migration |
+| `/` | Start live, case-insensitive name search |
+| `Enter` | Keep the current search |
+| `Esc` | Close help, cancel a modal, or clear search |
+| `m` | Review migration; use `1`/`2`/`3` for a divergent source and `y`/`n` to confirm or cancel |
 | `r` | Refresh filesystem state |
+| `?` | Open or close keyboard help |
 | `q` | Quit |
 
-States are `●` enabled, `○` disabled, `?` unmanaged, and `!` conflict.
+AMC renders at most 20 Skill rows and keeps the selection visible while
+scrolling. The actual row count shrinks with terminal height. Below 44 columns
+or 10 rows it shows a bounded resize message instead of wrapping the list;
+only `q` remains active until the terminal is resized.
+
+The bordered table highlights the selected scope and row. States use green
+`●` enabled, dim `○` disabled, yellow `◇` unmanaged, and red `!` conflict.
 
 ## Filesystem layout
 
@@ -99,13 +128,18 @@ AMC links the canonical store to:
 | Codex | `~/.codex/skills/` |
 
 AMC does not delete originals, backups, parked links, or failed artifacts. A
-foreign link, invalid entry, changed migration plan, or differing canonical
-copy blocks the operation before replacement. If an unexpected failure needs
-manual recovery, AMC prints the exact preserved paths; inspect them and verify
-the destination is absent before moving anything back.
+valid foreign link is adoptable: AMC copies its resolved Skill into the
+canonical store, archives only the Agent-facing link, and leaves the external
+source unchanged. A broken link is archived only when another valid same-name
+Skill is being adopted into that target. Broken-only links and invalid entries
+remain untouched diagnostics.
 
-V1 intentionally has no registry downloads, project-local Skills, automatic
-backup cleanup, Windows junction support, or concurrent-process coordination.
+Predictable paths are created exclusively. If filesystem state changes after
+planning, AMC stops instead of overwriting it. If recovery also meets a new
+object, AMC preserves both sides and prints the exact manual recovery paths.
+
+AMC intentionally has no registry downloads, project-local Skills, automatic
+backup cleanup, Windows junction support, or global process lock.
 
 ## Architecture
 
