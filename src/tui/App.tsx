@@ -1,5 +1,5 @@
 import {useCallback, useEffect, useMemo, useState} from 'react';
-import {Box, render, Text, useApp, useInput, useWindowSize} from 'ink';
+import {Box, render, Text, useApp, useInput, useWindowSize, type TextProps} from 'ink';
 import {
 	AmcError,
 	executeMigration,
@@ -14,6 +14,11 @@ import {
 	type TargetState,
 } from '../core/index.js';
 import {
+	themePalettes,
+	type TerminalPresentation,
+	type ThemePalette,
+} from '../presentation/theme.js';
+import {
 	filterSkills,
 	layoutForTerminal,
 	moveScope,
@@ -26,6 +31,7 @@ import {
 
 export type AppProps = Readonly<{
 	layout: Layout;
+	presentation: TerminalPresentation;
 	windowSize?: Readonly<{columns: number; rows: number}>;
 }>;
 
@@ -37,6 +43,12 @@ type Notice = Readonly<{
 type Modal =
 	| Readonly<{kind: 'source'; plan: MigrationPlan}>
 	| Readonly<{kind: 'confirm'; plan: MigrationPlan; source: Target | undefined}>;
+
+function ThemedText({color, ...props}: Readonly<Omit<TextProps, 'color'> & {
+	color: string | undefined;
+}>): React.JSX.Element {
+	return color === undefined ? <Text {...props}/> : <Text {...props} color={color}/>;
+}
 
 function errorText(error: unknown): string {
 	if (error instanceof AmcError) {
@@ -58,25 +70,65 @@ function targetFromInput(input: string): Target | undefined {
 	}
 }
 
-function StateMark({state, focused}: Readonly<{state: TargetState; focused: boolean}>): React.JSX.Element {
+function stateSymbol(state: TargetState): string {
 	switch (state) {
 		case 'enabled':
-			return <Text bold={focused} color="green" inverse={focused}>●</Text>;
+			return '●';
 		case 'disabled':
-			return <Text bold={focused} dimColor inverse={focused}>○</Text>;
+			return '○';
 		case 'unmanaged':
-			return <Text bold={focused} color="yellow" inverse={focused}>◇</Text>;
+			return '◇';
 		case 'conflict':
-			return <Text bold={focused} color="red" inverse={focused}>!</Text>;
+			return '!';
 	}
+}
+
+function stateColor(state: TargetState, palette: ThemePalette): string | undefined {
+	switch (state) {
+		case 'enabled':
+			return palette.enabled;
+		case 'disabled':
+			return palette.muted;
+		case 'unmanaged':
+			return palette.warning;
+		case 'conflict':
+			return palette.error;
+	}
+}
+
+function StateMark({
+	state,
+	focused,
+	presentation,
+}: Readonly<{
+	state: TargetState;
+	focused: boolean;
+	presentation: TerminalPresentation;
+}>): React.JSX.Element {
+	const palette = themePalettes[presentation.theme];
+	const symbol = stateSymbol(state);
+	if (!focused) {
+		return <ThemedText color={stateColor(state, palette)}>{symbol}</ThemedText>;
+	}
+	if (presentation.theme === 'mono') {
+		return <Text bold underline>{state === 'enabled' ? '◉' : symbol}</Text>;
+	}
+	return (
+		<Text>
+			<ThemedText color={stateColor(state, palette)}>{symbol}</ThemedText>
+			<ThemedText color={palette.accent}>⃝</ThemedText>
+		</Text>
+	);
 }
 
 function TableBorder({
 	terminalLayout,
 	position,
+	palette,
 }: Readonly<{
 	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
 	position: 'top' | 'middle' | 'bottom';
+	palette: ThemePalette;
 }>): React.JSX.Element {
 	const [left, separator, right] = position === 'top'
 		? ['┌', '┬', '┐']
@@ -90,40 +142,42 @@ function TableBorder({
 		terminalLayout.targetWidth,
 	];
 	return (
-		<Text color="cyan" dimColor>
+		<ThemedText color={palette.border} dimColor={palette.border === undefined}>
 			{left}{widths.map(width => '─'.repeat(width + 2)).join(separator)}{right}
-		</Text>
+		</ThemedText>
 	);
 }
 
 function TableHeader({
 	scope,
 	terminalLayout,
+	palette,
 }: Readonly<{
 	scope: ActionScope;
 	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+	palette: ThemePalette;
 }>): React.JSX.Element {
 	return (
 		<Box>
-			<Text color="cyan" dimColor>│ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}>│ </ThemedText>
 			<Box width={terminalLayout.skillWidth}>
-				<Text bold color="cyan" inverse={scope === 'all'} wrap="truncate-end">
+				<ThemedText bold color={scope === 'all' ? palette.accent : undefined} underline={scope === 'all'} wrap="truncate-end">
 					{'  Skill'.padEnd(terminalLayout.skillWidth)}
-				</Text>
+				</ThemedText>
 			</Box>
-			<Text color="cyan" dimColor> │ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
 			<Box justifyContent="center" width={terminalLayout.targetWidth}>
-				<Text bold color="cyan" inverse={scope === 'claude'}>{terminalLayout.compact ? 'C' : 'Claude'}</Text>
+				<ThemedText bold color={scope === 'claude' ? palette.accent : undefined} underline={scope === 'claude'}>{terminalLayout.compact ? 'C' : 'Claude'}</ThemedText>
 			</Box>
-			<Text color="cyan" dimColor> │ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
 			<Box justifyContent="center" width={terminalLayout.targetWidth}>
-				<Text bold color="cyan" inverse={scope === 'pi'}>{terminalLayout.compact ? 'P' : 'Pi'}</Text>
+				<ThemedText bold color={scope === 'pi' ? palette.accent : undefined} underline={scope === 'pi'}>{terminalLayout.compact ? 'P' : 'Pi'}</ThemedText>
 			</Box>
-			<Text color="cyan" dimColor> │ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
 			<Box justifyContent="center" width={terminalLayout.targetWidth}>
-				<Text bold color="cyan" inverse={scope === 'codex'}>{terminalLayout.compact ? 'X' : 'Codex'}</Text>
+				<ThemedText bold color={scope === 'codex' ? palette.accent : undefined} underline={scope === 'codex'}>{terminalLayout.compact ? 'X' : 'Codex'}</ThemedText>
 			</Box>
-			<Text color="cyan" dimColor> │</Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │</ThemedText>
 		</Box>
 	);
 }
@@ -131,16 +185,18 @@ function TableHeader({
 function TableMessageRow({
 	message,
 	terminalLayout,
+	palette,
 }: Readonly<{
 	message: string;
 	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+	palette: ThemePalette;
 }>): React.JSX.Element {
 	const width = terminalLayout.skillWidth + (terminalLayout.targetWidth * 3) + 9;
 	return (
 		<Box>
-			<Text color="cyan" dimColor>│ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}>│ </ThemedText>
 			<Box width={width}><Text dimColor wrap="truncate-end">{message.padEnd(width)}</Text></Box>
-			<Text color="cyan" dimColor> │</Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │</ThemedText>
 		</Box>
 	);
 }
@@ -150,27 +206,30 @@ function SkillRow({
 	selected,
 	scope,
 	terminalLayout,
+	presentation,
 }: Readonly<{
 	skill: Skill;
 	selected: boolean;
 	scope: ActionScope;
 	terminalLayout: Extract<TerminalLayout, {kind: 'ready'}>;
+	presentation: TerminalPresentation;
 }>): React.JSX.Element {
+	const palette = themePalettes[presentation.theme];
 	return (
 		<Box>
-			<Text color="cyan" dimColor>│ </Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}>│ </ThemedText>
 			<Box width={terminalLayout.skillWidth}>
-				<Text bold={selected} color={selected ? 'cyan' : 'white'} inverse={selected && scope === 'all'} wrap="truncate-end">
+				<ThemedText bold={selected} color={selected ? palette.accent : undefined} wrap="truncate-end">
 					{`${selected ? '› ' : '  '}${skill.name}`.padEnd(terminalLayout.skillWidth)}
-				</Text>
+				</ThemedText>
 			</Box>
-			<Text color="cyan" dimColor> │ </Text>
-			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.claude} focused={selected && scope === 'claude'}/></Box>
-			<Text color="cyan" dimColor> │ </Text>
-			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.pi} focused={selected && scope === 'pi'}/></Box>
-			<Text color="cyan" dimColor> │ </Text>
-			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.codex} focused={selected && scope === 'codex'}/></Box>
-			<Text color="cyan" dimColor> │</Text>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.claude} focused={selected && scope === 'claude'} presentation={presentation}/></Box>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.pi} focused={selected && scope === 'pi'} presentation={presentation}/></Box>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │ </ThemedText>
+			<Box justifyContent="center" width={terminalLayout.targetWidth}><StateMark state={skill.states.codex} focused={selected && scope === 'codex'} presentation={presentation}/></Box>
+			<ThemedText color={palette.border} dimColor={palette.border === undefined}> │</ThemedText>
 		</Box>
 	);
 }
@@ -188,14 +247,14 @@ function scopeLabel(scope: ActionScope): string {
 	}
 }
 
-function noticeColor(kind: Notice['kind']): 'yellow' | 'green' | 'red' {
+function noticeColor(kind: Notice['kind'], palette: ThemePalette): string | undefined {
 	switch (kind) {
 		case 'info':
-			return 'yellow';
+			return palette.warning;
 		case 'success':
-			return 'green';
+			return palette.enabled;
 		case 'error':
-			return 'red';
+			return palette.error;
 	}
 }
 
@@ -235,10 +294,11 @@ function HelpPanel(): React.JSX.Element {
 	);
 }
 
-export function App({layout, windowSize}: AppProps): React.JSX.Element {
+export function App({layout, presentation, windowSize}: AppProps): React.JSX.Element {
 	const {exit} = useApp();
 	const detectedWindowSize = useWindowSize();
 	const dimensions = windowSize ?? detectedWindowSize;
+	const palette = themePalettes[presentation.theme];
 	const terminalLayout = layoutForTerminal(dimensions.columns, dimensions.rows);
 	const [skills, setSkills] = useState<ReadonlyArray<Skill> | undefined>();
 	const [diagnosticCount, setDiagnosticCount] = useState(0);
@@ -519,10 +579,10 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 	if (terminalLayout.kind === 'too-small') {
 		return (
 			<Box flexDirection="column">
-				<Text bold color="cyan">AMC — Agent Management CLI</Text>
-				<Text color="yellow" wrap="truncate-end">
+				<ThemedText bold color={palette.accent}>AMC — Agent Management CLI</ThemedText>
+				<ThemedText color={palette.warning} wrap="truncate-end">
 					Terminal too small: {dimensions.columns}×{dimensions.rows}. Resize to at least {terminalLayout.minimumColumns}×{terminalLayout.minimumRows}.
-				</Text>
+				</ThemedText>
 				<Text dimColor>q quit</Text>
 			</Box>
 		);
@@ -531,28 +591,29 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 	return (
 		<Box flexDirection="column">
 			<Box>
-				<Text bold color="cyan" wrap="truncate-end">
-					AMC — Agent Management CLI  ·  {totalSkills} Skills  ·  {diagnosticCount} warnings
-				</Text>
+				<ThemedText bold color={palette.accent}>AMC</ThemedText>
+				<Text bold>  {totalSkills} Skills</Text>
+				<ThemedText color={palette.muted}>  ·  {diagnosticCount} warnings</ThemedText>
 			</Box>
 			<Box>
 				<Box flexGrow={1}>
 					<Text wrap="truncate-end">Search: </Text>
-					<Text bold={searching} color={query.length === 0 ? 'white' : 'yellow'} wrap="truncate-end">
+					<ThemedText bold={searching} color={query.length === 0 ? undefined : palette.warning} wrap="truncate-end">
 						{query.length === 0 ? '—' : query}{searching ? '█' : ''}
-					</Text>
+					</ThemedText>
 				</Box>
-				<Text dimColor>Scope: </Text><Text bold color="cyan">{scopeLabel(scope)}</Text>
+				<ThemedText color={palette.muted}>Scope: </ThemedText><ThemedText bold underline color={palette.accent}>{scopeLabel(scope)}</ThemedText>
 			</Box>
 			{helpOpen ? <HelpPanel/> : (
 				<Box flexDirection="column">
-					<TableBorder position="top" terminalLayout={terminalLayout}/>
-					<TableHeader scope={scope} terminalLayout={terminalLayout}/>
-					<TableBorder position="middle" terminalLayout={terminalLayout}/>
-					{skills === undefined ? <TableMessageRow message="Loading Skills…" terminalLayout={terminalLayout}/> : filteredSkills?.length === 0 ? (
+					<TableBorder position="top" terminalLayout={terminalLayout} palette={palette}/>
+					<TableHeader scope={scope} terminalLayout={terminalLayout} palette={palette}/>
+					<TableBorder position="middle" terminalLayout={terminalLayout} palette={palette}/>
+					{skills === undefined ? <TableMessageRow message="Loading Skills…" terminalLayout={terminalLayout} palette={palette}/> : filteredSkills?.length === 0 ? (
 						<TableMessageRow
 							message={query.length === 0 ? 'No Skills found.' : 'No Skills match the current search.'}
 							terminalLayout={terminalLayout}
+							palette={palette}
 						/>
 					) : currentWindow?.rows.map(skill => (
 						<SkillRow
@@ -561,31 +622,29 @@ export function App({layout, windowSize}: AppProps): React.JSX.Element {
 							selected={skill.name === selectedSkill?.name}
 							scope={scope}
 							terminalLayout={terminalLayout}
+							presentation={presentation}
 						/>
 					))}
-					<TableBorder position="bottom" terminalLayout={terminalLayout}/>
+					<TableBorder position="bottom" terminalLayout={terminalLayout} palette={palette}/>
 					<Box>
-						<Box flexGrow={1}><Text dimColor>{hasRowsAbove ? '↑ more' : ''}{hasRowsAbove && hasRowsBelow ? '  ' : ''}{hasRowsBelow ? '↓ more' : ''}</Text></Box>
-						<Text dimColor>{visibleStart}–{visibleEnd} / {filteredTotal}</Text>
+						<Box flexGrow={1}><ThemedText color={palette.muted}>{visibleStart}–{visibleEnd} / {filteredTotal}{hasRowsAbove ? '  ↑ more' : ''}{hasRowsBelow ? '  ↓ more' : ''}</ThemedText></Box>
+						<ThemedText color={palette.muted}>↑↓ move  ←→ scope  / search  ? help</ThemedText>
 					</Box>
 				</Box>
 			)}
 			<Box>
-				<Text color={noticeColor(status.kind)} wrap="truncate-end">{status.text}</Text>
+				<ThemedText color={noticeColor(status.kind, palette)} wrap="truncate-end">{status.text}</ThemedText>
 			</Box>
 			{terminalLayout.showLegend && (
 				<Box>
-					<Text color="green">● enabled</Text><Text dimColor>  ○ disabled  </Text><Text color="yellow">◇ unmanaged</Text><Text color="red">  ! conflict</Text>
+					<ThemedText color={palette.enabled}>● enabled</ThemedText><ThemedText color={palette.muted}>  ○ disabled  </ThemedText><ThemedText color={palette.warning}>◇ unmanaged</ThemedText><ThemedText color={palette.error}>  ! conflict</ThemedText>
 				</Box>
 			)}
-			<Box>
-				<Text dimColor wrap="truncate-end">↑↓ move  ←→ scope  Space toggle  / search  ? help  q quit</Text>
-			</Box>
 		</Box>
 	);
 }
 
-export async function runTui(layout: Layout): Promise<void> {
-	const instance = render(<App layout={layout}/>, {alternateScreen: true});
+export async function runTui(layout: Layout, presentation: TerminalPresentation): Promise<void> {
+	const instance = render(<App layout={layout} presentation={presentation}/>, {alternateScreen: true});
 	await instance.waitUntilExit();
 }

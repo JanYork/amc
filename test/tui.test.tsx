@@ -5,7 +5,10 @@ import test from 'node:test';
 import {render} from 'ink-testing-library';
 import {App} from '../src/tui/App.js';
 import {createLayout, setSkillEnabled} from '../src/core/index.js';
+import type {TerminalPresentation} from '../src/presentation/theme.js';
 import {createTestHome, resolvedLink, writeSkill} from './helpers.js';
+
+const darkPresentation: TerminalPresentation = {theme: 'dark', colorDepth: 24};
 
 async function waitForFrame(
 	lastFrame: () => string | undefined,
@@ -23,10 +26,25 @@ async function waitForFrame(
 
 test('Ink TUI renders loading and empty states', async () => {
 	const home = await createTestHome();
-	const instance = render(<App layout={createLayout(home)}/>);
+	const instance = render(<App layout={createLayout(home)} presentation={darkPresentation}/>);
 
 	assert.match(instance.frames[0] ?? '', /Loading Skills/);
-	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /AMC — Agent Management CLI/);
+	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /AMC  0 Skills  ·  0 warnings/);
+	instance.unmount();
+});
+
+test('Ink TUI uses a one-cell focused fallback in mono mode', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'alpha');
+	await setSkillEnabled(layout, 'alpha', true, ['claude']);
+	const presentation: TerminalPresentation = {theme: 'mono', colorDepth: 1};
+	const instance = render(<App layout={layout} presentation={presentation}/>);
+	await waitForFrame(instance.lastFrame, /› alpha/);
+	instance.stdin.write('\u001B[C');
+	const focused = await waitForFrame(instance.lastFrame, /Scope: Claude/);
+	assert.match(focused, /◉/u);
+	assert.doesNotMatch(focused, /⃝/u);
 	instance.unmount();
 });
 
@@ -36,7 +54,7 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	await writeSkill(layout.amc.skills, 'alpha');
 	await setSkillEnabled(layout, 'alpha', true, ['claude']);
 	await writeSkill(layout.targets.pi, 'beta', 'migrate beta');
-	const instance = render(<App layout={layout}/>);
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
 
 	const list = await waitForFrame(instance.lastFrame, /alpha/);
 	assert.match(list, /Skill.*Claude.*Pi.*Codex/);
@@ -44,6 +62,9 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	assert.match(list, /├.*┼.*┤/);
 	assert.match(list, /└.*┴.*┘/);
 	assert.match(list, /› alpha/);
+	instance.stdin.write('\u001B[C');
+	assert.match(await waitForFrame(instance.lastFrame, /Scope: Claude/), /●⃝/u);
+	instance.stdin.write('\u001B[D');
 	instance.stdin.write('j');
 	assert.match(await waitForFrame(instance.lastFrame, /› beta/), /\?/);
 
@@ -65,7 +86,7 @@ test('Ink TUI exposes divergence choice and blocks direct toggles of unmanaged e
 	const layout = createLayout(home);
 	await writeSkill(layout.targets.claude, 'alpha', 'claude');
 	await writeSkill(layout.targets.pi, 'alpha', 'pi');
-	const instance = render(<App layout={layout}/>);
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
 	await waitForFrame(instance.lastFrame, /› alpha/);
 
 	instance.stdin.write('m');
@@ -82,7 +103,7 @@ test('Ink TUI exposes divergence choice and blocks direct toggles of unmanaged e
 	const foreign = await writeSkill(join(conflictHome, 'foreign'), 'delta');
 	await mkdir(conflictLayout.targets.claude, {recursive: true});
 	await symlink(foreign, join(conflictLayout.targets.claude, 'delta'));
-	const conflicted = render(<App layout={conflictLayout}/>);
+	const conflicted = render(<App layout={conflictLayout} presentation={darkPresentation}/>);
 	assert.match(await waitForFrame(conflicted.lastFrame, /› delta/), /› delta.*◇/);
 	conflicted.stdin.write(' ');
 	assert.match(await waitForFrame(conflicted.lastFrame, /TARGET_BLOCKED/), /Target claude is unmanaged/);
@@ -96,7 +117,7 @@ test('Ink TUI keeps a large list inside the terminal viewport while arrows and p
 	for (let index = 0; index < 30; index += 1) {
 		await writeSkill(layout.amc.skills, `item-${String(index).padStart(2, '0')}`);
 	}
-	const instance = render(<App layout={layout} windowSize={{columns: 80, rows: 12}}/>);
+	const instance = render(<App layout={layout} presentation={darkPresentation} windowSize={{columns: 80, rows: 12}}/>);
 
 	const first = await waitForFrame(instance.lastFrame, /› item-00/);
 	assert.equal(first.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 2);
@@ -125,7 +146,7 @@ test('Ink TUI supports live search, clear, scope arrows, and help without growin
 	for (let index = 0; index < 30; index += 1) {
 		await writeSkill(layout.amc.skills, `item-${String(index).padStart(2, '0')}`);
 	}
-	const instance = render(<App layout={layout} windowSize={{columns: 80, rows: 12}}/>);
+	const instance = render(<App layout={layout} presentation={darkPresentation} windowSize={{columns: 80, rows: 12}}/>);
 	await waitForFrame(instance.lastFrame, /› item-00/);
 
 	instance.stdin.write('/');
@@ -157,13 +178,13 @@ test('Ink TUI truncates long rows and renders a bounded undersized-terminal mess
 	const layout = createLayout(home);
 	await writeSkill(layout.amc.skills, `skill-${'long-name-'.repeat(10)}`);
 
-	const compact = render(<App layout={layout} windowSize={{columns: 44, rows: 10}}/>);
+	const compact = render(<App layout={layout} presentation={darkPresentation} windowSize={{columns: 44, rows: 10}}/>);
 	const compactFrame = await waitForFrame(compact.lastFrame, /skill-/);
 	assert.ok(compactFrame.split('\n').length <= 10, compactFrame);
 	assert.match(compactFrame, /…/);
 	compact.unmount();
 
-	const small = render(<App layout={layout} windowSize={{columns: 43, rows: 9}}/>);
+	const small = render(<App layout={layout} presentation={darkPresentation} windowSize={{columns: 43, rows: 9}}/>);
 	const smallFrame = await waitForFrame(small.lastFrame, /Terminal too small/);
 	assert.match(smallFrame, /44×10/);
 	assert.doesNotMatch(smallFrame, /skill-long-name/);

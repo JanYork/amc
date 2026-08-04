@@ -5,10 +5,11 @@ import {AmcError, createLayout, type Layout} from './core/index.js';
 import {
 	resolveTerminalPresentation,
 	type ColorDepth,
+	type TerminalPresentation,
 } from './presentation/theme.js';
 
 type TuiModule = Readonly<{
-	runTui: (layout: Layout) => Promise<void>;
+	runTui: (layout: Layout, presentation: TerminalPresentation) => Promise<void>;
 }>;
 
 function isTuiModule(value: unknown): value is TuiModule {
@@ -18,13 +19,13 @@ function isTuiModule(value: unknown): value is TuiModule {
 		&& typeof value.runTui === 'function';
 }
 
-async function loadTui(layout: Layout): Promise<void> {
+async function loadTui(layout: Layout, presentation: TerminalPresentation): Promise<void> {
 	const modulePath = new URL('./tui/App.js', import.meta.url).href;
 	const loaded: unknown = await import(modulePath);
 	if (!isTuiModule(loaded)) {
 		throw new Error('AMC TUI module is invalid.');
 	}
-	await loaded.runTui(layout);
+	await loaded.runTui(layout, presentation);
 }
 
 async function main(): Promise<void> {
@@ -48,7 +49,7 @@ async function main(): Promise<void> {
 			if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 				throw new Error('AMC TUI requires an interactive terminal.');
 			}
-			await loadTui(layout);
+			await loadTui(layout, presentation);
 			return;
 		}
 
