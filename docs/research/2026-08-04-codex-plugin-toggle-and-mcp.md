@@ -6,7 +6,7 @@ Only first-party docs and official repositories are used below.
 
 ## Executive conclusion
 
-- Codex officially supports headless `plugin add`, `plugin list`, and `plugin remove`, plus interactive `/plugins` with Space to toggle installed plugins on or off. I did not find an official headless `plugin enable` or `plugin disable` command.
+- Codex has no `plugin enable` or `plugin disable` subcommand, but its official open-source configuration schema defines `plugins.<id>.enabled`. That makes a backed-up, transactional config edit a supported headless AMC path.
 - Codex does officially expose config-level MCP enable/disable controls: top-level `mcp_servers.<id>.enabled` and plugin-bundled `plugins.<plugin>.mcp_servers.<server>.enabled` in `config.toml`.
 - Claude Code officially supports headless plugin enable/disable and headless MCP add/list/get/remove flows, with `user`, `project`, and `local` scopes.
 - Pi officially does not ship MCP. Its official resource-management model is packages plus extensions, with interactive `pi config` for enable/disable.
@@ -16,15 +16,16 @@ Only first-party docs and official repositories are used below.
 ### Plugin enable/disable
 
 - Interactive toggle is official: Codex CLI uses `/plugins`, and pressing Space on an installed plugin turns it on or off.
-- Headless/plugin CLI is official for install inventory only: `codex plugin add`, `codex plugin list`, `codex plugin remove`.
+- The plugin CLI itself covers `add`, `list`, and `remove`, but not enable/disable.
 - `codex plugin list --json` includes `enabled`, so enabled state is observable.
-- I did not find an official headless toggle command or an official plugin-level config key that directly enables/disables the whole plugin.
+- The official Codex config schema defines user-level `plugins` entries whose `PluginConfig.enabled` field defaults to `true`. AMC can therefore update `plugins."<id>".enabled`, then confirm the result through the JSON inventory.
 
 Sources:
 
 - Codex plugins docs: <https://learn.chatgpt.com/docs/plugins>
 - Codex developer commands: <https://learn.chatgpt.com/docs/developer-commands?surface=cli>
 - Codex config reference: <https://learn.chatgpt.com/docs/config-file/config-reference>
+- Codex official config schema: <https://github.com/openai/codex/blob/main/codex-rs/core/config.schema.json>
 
 ### MCP
 
@@ -94,7 +95,7 @@ Source:
 
 | Surface | Official headless read | Official headless write | Official interactive toggle | Official config/file toggle | Safe AMC stance |
 | --- | --- | --- | --- | --- | --- |
-| Codex plugin | Yes | Add/remove only | Yes | No documented whole-plugin key found | Read state; install/remove; do not invent headless enable/disable |
+| Codex plugin | Yes | Add/remove via CLI; enable/disable via config | Yes | Yes, `plugins.<id>.enabled` | Back up, atomically update, and verify the documented config state |
 | Codex MCP server | Yes | Yes | Yes | Yes | Safe to automate within documented keys/commands |
 | Claude plugin | Yes | Yes | Yes | Yes | Safe to automate |
 | Claude MCP server | Yes | Yes | Yes | Yes | Safe to automate |
