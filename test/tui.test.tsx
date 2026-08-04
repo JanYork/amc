@@ -1,14 +1,26 @@
 import assert from 'node:assert/strict';
-import {mkdir, symlink} from 'node:fs/promises';
+import {mkdir, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {render} from 'ink-testing-library';
-import {App} from '../src/tui/App.js';
+import {App, ManagedApp} from '../src/tui/App.js';
 import {createLayout, setSkillEnabled} from '../src/core/index.js';
+import type {ResourceRuntime} from '../src/core/resources.js';
 import type {TerminalPresentation} from '../src/presentation/theme.js';
 import {createTestHome, resolvedLink, writeSkill} from './helpers.js';
 
 const darkPresentation: TerminalPresentation = {theme: 'dark', colorDepth: 24};
+
+const resourceRuntime: ResourceRuntime = {
+	run: (program, arguments_) => {
+		void arguments_;
+		if (program === 'claude') {
+			return Promise.resolve({exitCode: 0, stdout: '[{"id":"review@official","enabled":true,"scope":"user"}]', stderr: ''});
+		}
+		return Promise.resolve({exitCode: 0, stdout: program === 'codex' ? '{"installed":[]}' : '', stderr: ''});
+	},
+	openEditor: () => Promise.resolve(),
+};
 
 async function waitForFrame(
 	lastFrame: () => string | undefined,
@@ -31,6 +43,39 @@ test('Ink TUI renders loading and empty states', async () => {
 	assert.match(instance.frames[0] ?? '', /Loading Skills/);
 	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /AMC  0 Skills  ·  0 warnings/);
 	instance.unmount();
+});
+
+test('managed TUI switches among Skills, Hooks, and Plugins with bounded resource actions', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({
+		hooks: {Stop: [{hooks: [{type: 'command'}]}]},
+	}), 'utf8');
+	let editedId: string | undefined;
+	const instance = render(
+		<ManagedApp
+			layout={layout}
+			presentation={darkPresentation}
+			resources={{context: {home, cwd: home}, runtime: resourceRuntime}}
+			windowSize={{columns: 90, rows: 16}}
+			onHookEdit={id => {
+				editedId = id;
+			}}
+		/>,
+	);
+
+	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /Skills.*Hooks.*Plugins/);
+	instance.stdin.write('\t');
+	assert.match(await waitForFrame(instance.lastFrame, /Stop.*command/), /Hooks/);
+	instance.stdin.write('\t');
+	assert.match(await waitForFrame(instance.lastFrame, /review@official/), /native-headless/);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /No Skills found/);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Stop.*command/);
+	instance.stdin.write('e');
+	assert.match(editedId ?? '', /^[a-f0-9]{16}$/u);
 });
 
 test('Ink TUI shows the selected Skill description and source path', async () => {

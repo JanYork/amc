@@ -96,6 +96,24 @@ test('parseCommand accepts bulk migration inspection and apply modes', () => {
 	});
 });
 
+test('parseCommand accepts plugin and hook management commands', () => {
+	assert.deepEqual(parseCommand(['plugins', 'list', '--page=2', '--limit=10', '--search', 'review']), {
+		kind: 'plugins-list', page: 2, limit: 10, all: false, search: 'review',
+	});
+	assert.deepEqual(parseCommand(['plugins', 'enable', 'claude:review@official']), {
+		kind: 'plugin-enable', id: 'claude:review@official',
+	});
+	assert.deepEqual(parseCommand(['plugins', 'disable', 'claude:review@official']), {
+		kind: 'plugin-disable', id: 'claude:review@official',
+	});
+	assert.deepEqual(parseCommand(['hooks', 'list', '--all']), {
+		kind: 'hooks-list', page: 1, limit: 20, all: true, search: undefined,
+	});
+	assert.deepEqual(parseCommand(['hooks', 'edit', '0123456789abcdef']), {
+		kind: 'hook-edit', id: '0123456789abcdef',
+	});
+});
+
 test('parseCommand rejects every invalid usage before execution', async context => {
 	const invalidCases: ReadonlyArray<ReadonlyArray<string>> = [
 		['unknown'],
@@ -123,6 +141,13 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['--help', 'list'],
 		['--target', 'codex'],
 		['--not-an-option'],
+		['plugins'],
+		['plugins', 'enable'],
+		['plugins', 'enable', '../bad'],
+		['plugins', 'list', '--target', 'claude'],
+		['hooks'],
+		['hooks', 'edit', 'not-a-hook-id'],
+		['hooks', 'list', '--diagnostics'],
 	];
 
 	for (const arguments_ of invalidCases) {

@@ -2,6 +2,7 @@
 import {homedir} from 'node:os';
 import {executeCommand, helpText, parseCommand, UsageError} from './cli/index.js';
 import {AmcError, createLayout, type Layout} from './core/index.js';
+import {createResourceRuntime} from './runtime.js';
 import {
 	resolveTerminalPresentation,
 	type ColorDepth,
@@ -9,7 +10,11 @@ import {
 } from './presentation/theme.js';
 
 type TuiModule = Readonly<{
-	runTui: (layout: Layout, presentation: TerminalPresentation) => Promise<void>;
+	runTui: (
+		layout: Layout,
+		presentation: TerminalPresentation,
+		resources: Readonly<{context: Readonly<{home: string; cwd: string}>; runtime: ReturnType<typeof createResourceRuntime>}>,
+	) => Promise<void>;
 }>;
 
 function isTuiModule(value: unknown): value is TuiModule {
@@ -19,13 +24,17 @@ function isTuiModule(value: unknown): value is TuiModule {
 		&& typeof value.runTui === 'function';
 }
 
-async function loadTui(layout: Layout, presentation: TerminalPresentation): Promise<void> {
+async function loadTui(
+	layout: Layout,
+	presentation: TerminalPresentation,
+	resources: Readonly<{context: Readonly<{home: string; cwd: string}>; runtime: ReturnType<typeof createResourceRuntime>}>,
+): Promise<void> {
 	const modulePath = new URL('./tui/App.js', import.meta.url).href;
 	const loaded: unknown = await import(modulePath);
 	if (!isTuiModule(loaded)) {
 		throw new Error('AMC TUI module is invalid.');
 	}
-	await loaded.runTui(layout, presentation);
+	await loaded.runTui(layout, presentation, resources);
 }
 
 async function main(): Promise<void> {
@@ -45,11 +54,15 @@ async function main(): Promise<void> {
 			colorDepth,
 		});
 		const layout = createLayout(homedir());
+		const resources = {
+			context: {home: layout.home, cwd: process.cwd()},
+			runtime: createResourceRuntime(process.env),
+		};
 		if (command.kind === 'tui') {
 			if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
 				throw new Error('AMC TUI requires an interactive terminal.');
 			}
-			await loadTui(layout, presentation);
+			await loadTui(layout, presentation, resources);
 			return;
 		}
 
@@ -59,7 +72,7 @@ async function main(): Promise<void> {
 				? 80
 				: process.stdout.columns,
 			presentation,
-		})}\n`);
+		}, resources)}\n`);
 	} catch (error: unknown) {
 		if (error instanceof UsageError) {
 			process.stderr.write(`${error.message}\n\n${helpText}\n`);

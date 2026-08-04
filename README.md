@@ -66,6 +66,11 @@ amc migrate <skill>
 amc migrate <skill> --source claude|pi|codex
 amc migrate --all
 amc migrate --all --yes
+amc plugins list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+amc plugins enable <plugin-id>
+amc plugins disable <plugin-id>
+amc hooks list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+amc hooks edit <hook-id>
 amc --help
 amc --version
 ```
@@ -80,10 +85,18 @@ Enable and disable target all three Agents by default. `--target` narrows an
 operation to one Agent. Headless commands never prompt: success exits `0`, a
 filesystem or state conflict exits `1`, and invalid usage exits `2`.
 
+Plugin inventory comes from each provider's public CLI. Claude Code plugins
+can be enabled or disabled directly; Codex and Pi return the required
+interactive command (`codex /plugins` or `pi config`) instead of rewriting
+private state. Hook inventory is read-only, and `hooks edit` opens the selected
+provider-owned source with `$VISUAL` or `$EDITOR`. AMC never executes a Hook
+while inspecting it; if neither variable is set, it reports how to configure one.
+
 ## TUI keys
 
 | Key | Action |
 | --- | --- |
+| `Tab` | Switch Skills, Hooks, and Plugins |
 | `↑` / `↓`, `j` / `k` | Move selection |
 | `Page Up` / `Page Down` | Move one visible page |
 | `Home` / `End` | Jump to first or last result |
@@ -97,6 +110,11 @@ filesystem or state conflict exits `1`, and invalid usage exits `2`.
 | `r` | Refresh filesystem state |
 | `?` | Open or close keyboard help |
 | `q` | Quit |
+
+In Hooks, press `e` to leave AMC and open the selected source file. In Plugins,
+press `Space` to toggle a Claude Code plugin; Codex and Pi show their required
+interactive command. All three views cap the visible list at 20 rows and
+support `/` search, arrows, `j`/`k`, `r`, and `q`.
 
 AMC renders at most 20 Skill rows and keeps the selection visible while
 scrolling. The actual row count shrinks with terminal height. Below 44 columns

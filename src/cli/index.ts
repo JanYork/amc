@@ -20,6 +20,16 @@ import {
 	type ToggleResult,
 } from '../core/index.js';
 import {
+	editHook,
+	scanHooks,
+	scanPlugins,
+	setPluginEnabled,
+	type HookResource,
+	type PluginResource,
+	type ResourceContext,
+	type ResourceRuntime,
+} from '../core/resources.js';
+import {
 	ansiCodeForRole,
 	type ColorRole,
 	type TerminalPresentation,
@@ -40,7 +50,12 @@ export type Command =
 	| Readonly<{kind: 'enable'; name: string; target: Target | undefined}>
 	| Readonly<{kind: 'disable'; name: string; target: Target | undefined}>
 	| Readonly<{kind: 'migrate'; name: string; source: Target | undefined}>
-	| Readonly<{kind: 'migrate-all'; apply: boolean}>;
+	| Readonly<{kind: 'migrate-all'; apply: boolean}>
+	| Readonly<{kind: 'plugins-list'; page: number; limit: number; all: boolean; search: string | undefined}>
+	| Readonly<{kind: 'plugin-enable'; id: string}>
+	| Readonly<{kind: 'plugin-disable'; id: string}>
+	| Readonly<{kind: 'hooks-list'; page: number; limit: number; all: boolean; search: string | undefined}>
+	| Readonly<{kind: 'hook-edit'; id: string}>;
 
 export type HeadlessCommand = Exclude<Command, {kind: 'tui'}>;
 
@@ -64,6 +79,10 @@ Usage:
   amc disable <skill> [--target claude|pi|codex]
   amc migrate <skill> [--source claude|pi|codex]
   amc migrate --all [--yes]
+  amc plugins list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+  amc plugins enable|disable <plugin-id>
+  amc hooks list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+  amc hooks edit <hook-id>
   amc --help
   amc --version`;
 
@@ -111,6 +130,13 @@ function validateName(value: string | undefined): string {
 		return usage('Skill name must be one safe path segment');
 	}
 
+	return value;
+}
+
+function validateHookId(value: string | undefined): string {
+	if (value === undefined || !/^[a-f0-9]{16}$/u.test(value)) {
+		return usage('Hook id must be the 16-character id shown by amc hooks list');
+	}
 	return value;
 }
 
@@ -196,6 +222,42 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 
 		const kind = positionals[0];
 		switch (kind) {
+			case 'plugins':
+			case 'hooks': {
+				const action = positionals[1];
+				if (hasTarget || hasSource || wantsDiagnostics || wantsYes) {
+					return usage(`${kind} does not accept target, source, diagnostics, or yes options`);
+				}
+				if (action === 'list') {
+					requirePositionals(positionals, 2);
+					if (wantsAll && (hasPage || hasLimit)) {
+						return usage(`${kind} list --all does not accept --page or --limit`);
+					}
+					if (values.search !== undefined && values.search.length === 0) {
+						return usage(`${kind} list --search must not be empty`);
+					}
+					return {
+						kind: kind === 'plugins' ? 'plugins-list' : 'hooks-list',
+						page: parsePositiveInteger(values.page, '--page') ?? 1,
+						limit: parsePositiveInteger(values.limit, '--limit', 100) ?? 20,
+						all: wantsAll,
+						search: values.search,
+					};
+				}
+				if (hasListOption || wantsAll) {
+					return usage(`${kind} ${action ?? ''} does not accept list options`);
+				}
+				if (kind === 'plugins' && (action === 'enable' || action === 'disable')) {
+					requirePositionals(positionals, 3);
+					return {kind: action === 'enable' ? 'plugin-enable' : 'plugin-disable', id: validateName(positionals[2])};
+				}
+				if (kind === 'hooks' && action === 'edit') {
+					requirePositionals(positionals, 3);
+					return {kind: 'hook-edit', id: validateHookId(positionals[2])};
+				}
+				return usage(`Invalid ${kind} command`);
+			}
+
 			case 'list': {
 				requirePositionals(positionals, 1);
 				if (hasTarget || hasSource || wantsYes) {
@@ -263,6 +325,85 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 
 		throw new UsageError(error instanceof Error ? error.message : 'Invalid arguments');
 	}
+}
+
+export type ResourceExecution = Readonly<{
+	context: ResourceContext;
+	runtime: ResourceRuntime;
+}>;
+
+function requireResources(resources: ResourceExecution | undefined): ResourceExecution {
+	if (resources === undefined) {
+		throw new Error('Resource runtime is unavailable.');
+	}
+	return resources;
+}
+
+function pluginTable(plugins: ReadonlyArray<PluginResource>, output: OutputContext): ReadonlyArray<string> {
+	if (plugins.length === 0) {
+		return ['No plugins found.'];
+	}
+	const compact = output.isTTY && output.columns < 68;
+	const longest = Math.max(8, ...plugins.map(plugin => characterLength(plugin.name)));
+	const widths = compact
+		? [Math.max(8, Math.min(longest, output.columns - 26)), 1, 1, 11]
+		: [output.isTTY ? Math.max(8, Math.min(longest, output.columns - 48)) : longest, 8, 9, 18];
+	const lines = [
+		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
+		tableRow(compact ? ['PLUGIN', 'P', 'S', 'MODE'] : ['PLUGIN', 'PROVIDER', 'STATE', 'MANAGEMENT'], widths, ['bold', 'bold', 'bold', 'bold'], output),
+		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
+	];
+	for (const plugin of plugins) {
+		lines.push(tableRow(
+			compact
+				? [plugin.name, plugin.provider.slice(0, 1).toUpperCase(), plugin.state === 'enabled' ? '●' : plugin.state === 'disabled' ? '○' : '?', plugin.capability.replace('native-', '')]
+				: [plugin.name, plugin.provider, plugin.state, plugin.capability],
+			widths,
+			[undefined, 'accent', plugin.state === 'enabled' ? 'enabled' : 'muted', 'muted'],
+			output,
+		));
+	}
+	lines.push(tableBorder(widths, {left: '└', separator: '┴', right: '┘'}, output));
+	return lines;
+}
+
+function hookTable(hooks: ReadonlyArray<HookResource>, output: OutputContext): ReadonlyArray<string> {
+	if (hooks.length === 0) {
+		return ['No hooks found.'];
+	}
+	const compact = output.isTTY && output.columns < 68;
+	const longest = Math.max(8, ...hooks.map(hook => characterLength(hook.event)));
+	const widths = compact
+		? [8, 1, 1, Math.max(8, Math.min(longest, output.columns - 29)), 3]
+		: [16, 8, 7, output.isTTY ? Math.max(8, Math.min(longest, output.columns - 56)) : longest, 9];
+	const lines = [
+		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
+		tableRow(compact ? ['ID', 'P', 'S', 'EVENT', 'TYPE'] : ['ID', 'PROVIDER', 'SCOPE', 'EVENT', 'TYPE'], widths, ['bold', 'bold', 'bold', 'bold', 'bold'], output),
+		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
+	];
+	for (const hook of hooks) {
+		lines.push(tableRow(
+			compact
+				? [hook.id, hook.provider.slice(0, 1).toUpperCase(), hook.scope.slice(0, 1).toUpperCase(), hook.event, hook.type]
+				: [hook.id, hook.provider, hook.scope, hook.event, hook.type],
+			widths,
+			['muted', 'accent', undefined, undefined, undefined],
+			output,
+		));
+	}
+	lines.push(tableBorder(widths, {left: '└', separator: '┴', right: '┘'}, output));
+	return lines;
+}
+
+function resourceFooter<T>(page: Page<T>, prefix: string): ReadonlyArray<string> {
+	const lines = [`Showing ${page.start}–${page.end} of ${page.total} · Page ${page.page}/${page.pageCount}`];
+	if (page.page < page.pageCount) {
+		lines.push(`Next: ${prefix} --page ${page.page + 1}`);
+	}
+	if (page.page > 1) {
+		lines.push(`Previous: ${prefix} --page ${page.page - 1}`);
+	}
+	return lines;
 }
 
 function formatToggle(result: ToggleResult, enabled: boolean): string {
@@ -626,6 +767,7 @@ export async function executeCommand(
 		columns: 80,
 		presentation: {theme: 'mono', colorDepth: 1},
 	},
+	resources?: ResourceExecution,
 ): Promise<string> {
 	switch (command.kind) {
 		case 'help':
@@ -664,6 +806,38 @@ export async function executeCommand(
 				throw new AmcError('BULK_MIGRATION_FAILED', formatted, result.failure.path);
 			}
 			return formatted;
+		}
+		case 'plugins-list': {
+			const {context, runtime} = requireResources(resources);
+			const result = await scanPlugins(context, runtime);
+			const filtered = result.plugins.filter(plugin => includesSearch(`${plugin.name}\n${plugin.provider}`, command.search));
+			const page = paginate(filtered, command.page, command.limit, command.all);
+			return [
+				`${ansiRole('AMC', 'accent', output)} Plugins · ${filtered.length} shown · ${result.diagnostics.length} warnings`,
+				'', ...pluginTable(page.rows, output), '', ...resourceFooter(page, 'amc plugins list'),
+			].join('\n');
+		}
+		case 'plugin-enable':
+		case 'plugin-disable': {
+			const {context, runtime} = requireResources(resources);
+			const enabled = command.kind === 'plugin-enable';
+			const plugin = await setPluginEnabled(context, runtime, command.id, enabled);
+			return `${enabled ? 'Enabled' : 'Disabled'} ${plugin.id}: ${plugin.state}`;
+		}
+		case 'hooks-list': {
+			const {context} = requireResources(resources);
+			const result = await scanHooks(context);
+			const filtered = result.hooks.filter(hook => includesSearch(`${hook.provider}\n${hook.event}\n${hook.type}\n${hook.sourcePath}`, command.search));
+			const page = paginate(filtered, command.page, command.limit, command.all);
+			return [
+				`${ansiRole('AMC', 'accent', output)} Hooks · ${filtered.length} shown · ${result.diagnostics.length} warnings`,
+				'', ...hookTable(page.rows, output), '', ...resourceFooter(page, 'amc hooks list'),
+			].join('\n');
+		}
+		case 'hook-edit': {
+			const {context, runtime} = requireResources(resources);
+			await editHook(context, runtime, command.id);
+			return `Edited hook source for ${command.id}.`;
 		}
 	}
 }
