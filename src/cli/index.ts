@@ -19,6 +19,11 @@ import {
 	type TargetState,
 	type ToggleResult,
 } from '../core/index.js';
+import {
+	ansiCodeForRole,
+	type ColorRole,
+	type TerminalPresentation,
+} from '../presentation/theme.js';
 
 export type Command =
 	| Readonly<{kind: 'tui'}>
@@ -42,6 +47,7 @@ export type HeadlessCommand = Exclude<Command, {kind: 'tui'}>;
 export type OutputContext = Readonly<{
 	isTTY: boolean;
 	columns: number;
+	presentation: TerminalPresentation;
 }>;
 
 export const version = '0.1.0';
@@ -405,6 +411,11 @@ function ansi(value: string, code: string, output: OutputContext): string {
 	return output.isTTY ? `\u001B[${code}m${value}\u001B[0m` : value;
 }
 
+function ansiRole(value: string, role: ColorRole, output: OutputContext): string {
+	const code = ansiCodeForRole(output.presentation, role);
+	return code === undefined ? value : ansi(value, code, output);
+}
+
 function stateText(state: TargetState, compact: boolean): string {
 	if (!compact) {
 		return state;
@@ -421,16 +432,16 @@ function stateText(state: TargetState, compact: boolean): string {
 	}
 }
 
-function stateAnsiCode(state: TargetState): string {
+function stateRole(state: TargetState): ColorRole {
 	switch (state) {
 		case 'enabled':
-			return '32';
+			return 'enabled';
 		case 'disabled':
-			return '2';
+			return 'muted';
 		case 'unmanaged':
-			return '33';
+			return 'warning';
 		case 'conflict':
-			return '31';
+			return 'error';
 	}
 }
 
@@ -439,9 +450,9 @@ function tableBorder(
 	characters: Readonly<{left: string; separator: string; right: string}>,
 	output: OutputContext,
 ): string {
-	return ansi(
+	return ansiRole(
 		`${characters.left}${widths.map(width => '─'.repeat(width + 2)).join(characters.separator)}${characters.right}`,
-		'2;36',
+		'border',
 		output,
 	);
 }
@@ -449,14 +460,16 @@ function tableBorder(
 function tableRow(
 	values: ReadonlyArray<string>,
 	widths: ReadonlyArray<number>,
-	codes: ReadonlyArray<string | undefined>,
+	styles: ReadonlyArray<'bold' | ColorRole | undefined>,
 	output: OutputContext,
 ): string {
 	const cells = values.map((value, index) => {
 		const width = widths[index] ?? characterLength(value);
 		const cell = fit(value, width, output.isTTY);
-		const code = codes[index];
-		return code === undefined ? cell : ansi(cell, code, output);
+		const style = styles[index];
+		return style === undefined
+			? cell
+			: style === 'bold' ? ansi(cell, '1', output) : ansiRole(cell, style, output);
 	});
 	return `│ ${cells.join(' │ ')} │`;
 }
@@ -480,7 +493,7 @@ function skillTable(skills: ReadonlyArray<Skill>, output: OutputContext): Readon
 	const widths = [skillWidth, targetWidth, targetWidth, targetWidth];
 	const lines = [
 		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
-		tableRow(['SKILL', headers[0] ?? '', headers[1] ?? '', headers[2] ?? ''], widths, ['1;36', '1;36', '1;36', '1;36'], output),
+		tableRow(['SKILL', headers[0] ?? '', headers[1] ?? '', headers[2] ?? ''], widths, ['bold', 'bold', 'bold', 'bold'], output),
 		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
 	];
 
@@ -495,9 +508,9 @@ function skillTable(skills: ReadonlyArray<Skill>, output: OutputContext): Readon
 			widths,
 			[
 				undefined,
-				stateAnsiCode(skill.states.claude),
-				stateAnsiCode(skill.states.pi),
-				stateAnsiCode(skill.states.codex),
+				stateRole(skill.states.claude),
+				stateRole(skill.states.pi),
+				stateRole(skill.states.codex),
 			],
 			output,
 		));
@@ -532,7 +545,7 @@ function diagnosticTable(
 	const widths = [messageWidth, pathWidth];
 	const lines = [
 		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
-		tableRow(['MESSAGE', 'PATH'], widths, ['1;36', '1;36'], output),
+		tableRow(['MESSAGE', 'PATH'], widths, ['bold', 'bold'], output),
 		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
 	];
 
@@ -540,7 +553,7 @@ function diagnosticTable(
 		lines.push(tableRow(
 			[diagnostic.message, diagnostic.path],
 			widths,
-			['31', undefined],
+			['error', undefined],
 			output,
 		));
 	}
@@ -583,7 +596,7 @@ function formatList(
 			? `${filtered.length} total`
 			: `${filtered.length} matches · ${result.diagnostics.length} total`;
 		return [
-			ansi(`AMC Diagnostics · ${count}`, '1;36', output),
+			`${ansiRole('AMC', 'accent', output)} Diagnostics · ${count}`,
 			'',
 			...diagnosticTable(page.rows, output),
 			'',
@@ -597,7 +610,7 @@ function formatList(
 		? `${filtered.length} total`
 		: `${filtered.length} matches · ${result.skills.length} total`;
 	return [
-		ansi(`AMC Skills · ${count} · ${warningLabel(result.diagnostics.length)}`, '1;36', output),
+		`${ansiRole('AMC', 'accent', output)} Skills · ${count} · ${ansiRole(warningLabel(result.diagnostics.length), 'muted', output)}`,
 		'',
 		...skillTable(page.rows, output),
 		'',
@@ -608,7 +621,11 @@ function formatList(
 export async function executeCommand(
 	layout: Layout,
 	command: HeadlessCommand,
-	output: OutputContext = {isTTY: false, columns: 80},
+	output: OutputContext = {
+		isTTY: false,
+		columns: 80,
+		presentation: {theme: 'mono', colorDepth: 1},
+	},
 ): Promise<string> {
 	switch (command.kind) {
 		case 'help':

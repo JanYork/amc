@@ -1,9 +1,11 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+	ansiCodeForRole,
 	resolveTerminalPresentation,
 	themePalettes,
 	type ThemeEnvironment,
+	type TerminalPresentation,
 } from '../src/presentation/theme.js';
 
 function environment(overrides: Partial<ThemeEnvironment> = {}): ThemeEnvironment {
@@ -56,4 +58,12 @@ test('theme resolver preserves supported color depth and exposes approved palett
 	assert.equal(themePalettes.dark.enabled, '#5db872');
 	assert.equal(themePalettes.light.enabled, '#2f7d46');
 	assert.equal(themePalettes.mono.accent, undefined);
+});
+
+test('semantic colors degrade to basic ANSI when truecolor is unavailable', () => {
+	const presentation: TerminalPresentation = {theme: 'light', colorDepth: 4};
+	assert.equal(ansiCodeForRole(presentation, 'accent'), '31');
+	assert.equal(ansiCodeForRole(presentation, 'enabled'), '32');
+	assert.equal(ansiCodeForRole(presentation, 'warning'), '33');
+	assert.equal(ansiCodeForRole(presentation, 'border'), '90');
 });

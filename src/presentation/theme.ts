@@ -23,6 +23,8 @@ export type ThemePalette = Readonly<{
 	error: string | undefined;
 }>;
 
+export type ColorRole = keyof ThemePalette;
+
 export const themePalettes: Readonly<Record<ThemeName, ThemePalette>> = {
 	dark: {
 		accent: '#cc785c',
@@ -82,4 +84,42 @@ export function resolveTerminalPresentation(environment: ThemeEnvironment): Term
 		? 'mono'
 		: requestedTheme ?? backgroundTheme(environment.colorFgBg);
 	return {theme, colorDepth: environment.colorDepth};
+}
+
+function basicAnsiCode(role: ColorRole): string {
+	switch (role) {
+		case 'accent':
+		case 'error':
+			return '31';
+		case 'enabled':
+			return '32';
+		case 'warning':
+			return '33';
+		case 'muted':
+		case 'border':
+			return '90';
+	}
+}
+
+export function ansiCodeForRole(
+	presentation: TerminalPresentation,
+	role: ColorRole,
+): string | undefined {
+	if (presentation.theme === 'mono') {
+		return role === 'accent'
+			? '1'
+			: role === 'muted' || role === 'border' ? '2' : undefined;
+	}
+	if (presentation.colorDepth !== 24) {
+		return basicAnsiCode(role);
+	}
+
+	const color = themePalettes[presentation.theme][role];
+	if (color === undefined) {
+		return undefined;
+	}
+	const red = Number.parseInt(color.slice(1, 3), 16);
+	const green = Number.parseInt(color.slice(3, 5), 16);
+	const blue = Number.parseInt(color.slice(5, 7), 16);
+	return `38;2;${red};${green};${blue}`;
 }

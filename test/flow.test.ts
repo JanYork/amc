@@ -61,7 +61,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		all: false,
 		search: undefined,
 		diagnostics: false,
-	}, {isTTY: false, columns: 80});
+	}, {isTTY: false, columns: 80, presentation: {theme: 'mono', colorDepth: 1}});
 	assert.match(firstPage, /^AMC Skills · 25 total · 1 warning/m);
 	assert.equal(firstPage.split('\n').filter(line => line.startsWith('│ skill-')).length, 20);
 	assert.match(firstPage, /Showing 1–20 of 25 · Page 1\/2/);
@@ -76,7 +76,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		all: false,
 		search: undefined,
 		diagnostics: false,
-	}, {isTTY: false, columns: 80});
+	}, {isTTY: false, columns: 80, presentation: {theme: 'mono', colorDepth: 1}});
 	assert.equal(secondPage.split('\n').filter(line => line.startsWith('│ skill-')).length, 5);
 	assert.match(secondPage, /skill-21/);
 	assert.match(secondPage, /Showing 21–25 of 25 · Page 2\/2/);
@@ -88,7 +88,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		all: true,
 		search: 'SKILL-2',
 		diagnostics: false,
-	}, {isTTY: false, columns: 80});
+	}, {isTTY: false, columns: 80, presentation: {theme: 'mono', colorDepth: 1}});
 	assert.equal(searched.split('\n').filter(line => line.startsWith('│ skill-')).length, 6);
 	assert.doesNotMatch(searched, /skill-19/);
 
@@ -99,7 +99,7 @@ test('headless list renders bounded pages, search, and separate diagnostics', as
 		all: false,
 		search: undefined,
 		diagnostics: true,
-	}, {isTTY: false, columns: 80});
+	}, {isTTY: false, columns: 80, presentation: {theme: 'mono', colorDepth: 1}});
 	assert.match(diagnostics, /^AMC Diagnostics · 1 total/m);
 	assert.match(diagnostics, /not-a-skill/);
 	assert.doesNotMatch(diagnostics, /^skill-01/m);
@@ -119,7 +119,7 @@ test('redirected list preserves complete long names without ANSI', async () => {
 		all: false,
 		search: undefined,
 		diagnostics: false,
-	}, {isTTY: false, columns: 44});
+	}, {isTTY: false, columns: 44, presentation: {theme: 'mono', colorDepth: 1}});
 	assert.match(output, new RegExp(longName, 'u'));
 	assert.match(output, /┌.*┬.*┐/u);
 	assert.doesNotMatch(output, /\u001B\[/u);
@@ -137,10 +137,17 @@ test('interactive list uses table borders and ANSI emphasis', async () => {
 		all: false,
 		search: undefined,
 		diagnostics: false,
-	}, {isTTY: true, columns: 80});
+	}, {
+		isTTY: true,
+		columns: 80,
+		presentation: {theme: 'dark', colorDepth: 24},
+	});
 
 	assert.match(output, /┌.*┬.*┐/u);
-	assert.match(output, /\u001B\[/u);
+	assert.match(output, /\u001B\[38;2;204;120;92mAMC\u001B\[0m/u);
+	assert.match(output, /\u001B\[38;2;85;82;78m┌/u);
+	assert.match(output, /\u001B\[38;2;232;165;90munmanaged/u);
+	assert.doesNotMatch(output, /\u001B\[[^m]*36m/u);
 });
 
 test('headless bulk dry run caps the human preview without hiding totals', async () => {

@@ -2,6 +2,10 @@
 import {homedir} from 'node:os';
 import {executeCommand, helpText, parseCommand, UsageError} from './cli/index.js';
 import {AmcError, createLayout, type Layout} from './core/index.js';
+import {
+	resolveTerminalPresentation,
+	type ColorDepth,
+} from './presentation/theme.js';
 
 type TuiModule = Readonly<{
 	runTui: (layout: Layout) => Promise<void>;
@@ -26,6 +30,19 @@ async function loadTui(layout: Layout): Promise<void> {
 async function main(): Promise<void> {
 	try {
 		const command = parseCommand(process.argv.slice(2));
+		const reportedColorDepth = process.stdout.isTTY === true
+			? process.stdout.getColorDepth()
+			: 1;
+		const colorDepth: ColorDepth = reportedColorDepth === 24
+			? 24
+			: reportedColorDepth === 8 ? 8 : reportedColorDepth === 4 ? 4 : 1;
+		const presentation = resolveTerminalPresentation({
+			amcTheme: process.env['AMC_THEME'],
+			colorFgBg: process.env['COLORFGBG'],
+			noColor: process.env['NO_COLOR'] !== undefined,
+			isTTY: process.stdout.isTTY === true,
+			colorDepth,
+		});
 		const layout = createLayout(homedir());
 		if (command.kind === 'tui') {
 			if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {
@@ -40,6 +57,7 @@ async function main(): Promise<void> {
 			columns: process.stdout.columns === undefined || process.stdout.columns < 1
 				? 80
 				: process.stdout.columns,
+			presentation,
 		})}\n`);
 	} catch (error: unknown) {
 		if (error instanceof UsageError) {
