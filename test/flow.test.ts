@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import test from 'node:test';
 import {executeCommand} from '../src/cli/index.js';
 import {createLayout} from '../src/core/index.js';
+import type {ResourceRuntime} from '../src/core/resources.js';
 import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js';
 
 const binary = join(process.cwd(), 'dist', 'src', 'main.js');
@@ -148,6 +149,27 @@ test('interactive list uses table borders and ANSI emphasis', async () => {
 	assert.match(output, /\u001B\[38;2;85;82;78m┌/u);
 	assert.match(output, /\u001B\[38;2;232;165;90munmanaged/u);
 	assert.doesNotMatch(output, /\u001B\[[^m]*36m/u);
+});
+
+test('headless MCP list is paginated, searchable, and never prints transport secrets', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const runtime: ResourceRuntime = {
+		run: () => Promise.resolve({
+			exitCode: 0,
+			stdout: JSON.stringify([{name: 'node_repl', enabled: true, transport: {type: 'stdio', env: {TOKEN: 'do-not-print'}}}]),
+			stderr: '',
+		}),
+		openEditor: () => Promise.resolve(),
+	};
+	const output = await executeCommand(layout, {
+		kind: 'mcp-list', page: 1, limit: 20, all: false, search: 'node',
+	}, undefined, {context: {home, cwd: home}, runtime});
+
+	assert.match(output, /^AMC MCP · 1 shown · 0 warnings/mu);
+	assert.match(output, /node_repl.*codex.*user.*stdio.*enabled/u);
+	assert.match(output, /Pi does not provide native MCP/u);
+	assert.doesNotMatch(output, /do-not-print|TOKEN/u);
 });
 
 test('headless bulk dry run caps the human preview without hiding totals', async () => {

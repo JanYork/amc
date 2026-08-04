@@ -112,6 +112,15 @@ test('parseCommand accepts plugin and hook management commands', () => {
 	assert.deepEqual(parseCommand(['hooks', 'edit', '0123456789abcdef']), {
 		kind: 'hook-edit', id: '0123456789abcdef',
 	});
+	assert.deepEqual(parseCommand(['mcp', 'list', '--search', 'graph']), {
+		kind: 'mcp-list', page: 1, limit: 20, all: false, search: 'graph',
+	});
+	assert.deepEqual(parseCommand(['mcp', 'enable', 'codex:node_repl:user']), {
+		kind: 'mcp-enable', id: 'codex:node_repl:user',
+	});
+	assert.deepEqual(parseCommand(['mcp', 'disable', 'claude:codegraph:user']), {
+		kind: 'mcp-disable', id: 'claude:codegraph:user',
+	});
 });
 
 test('parseCommand rejects every invalid usage before execution', async context => {
@@ -148,6 +157,10 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['hooks'],
 		['hooks', 'edit', 'not-a-hook-id'],
 		['hooks', 'list', '--diagnostics'],
+		['mcp'],
+		['mcp', 'enable'],
+		['mcp', 'enable', '../bad'],
+		['mcp', 'list', '--target', 'codex'],
 	];
 
 	for (const arguments_ of invalidCases) {

@@ -13,11 +13,13 @@ const darkPresentation: TerminalPresentation = {theme: 'dark', colorDepth: 24};
 
 const resourceRuntime: ResourceRuntime = {
 	run: (program, arguments_) => {
-		void arguments_;
 		if (program === 'claude') {
 			return Promise.resolve({exitCode: 0, stdout: '[{"id":"review@official","enabled":true,"scope":"user"}]', stderr: ''});
 		}
-		return Promise.resolve({exitCode: 0, stdout: program === 'codex' ? '{"installed":[]}' : '', stderr: ''});
+		if (program === 'codex') {
+			return Promise.resolve({exitCode: 0, stdout: arguments_[0] === 'mcp' ? '[{"name":"node_repl","enabled":true,"transport":{"type":"stdio"}}]' : '{"installed":[]}', stderr: ''});
+		}
+		return Promise.resolve({exitCode: 0, stdout: '', stderr: ''});
 	},
 	openEditor: () => Promise.resolve(),
 };
@@ -45,7 +47,7 @@ test('Ink TUI renders loading and empty states', async () => {
 	instance.unmount();
 });
 
-test('managed TUI switches among Skills, Hooks, and Plugins with bounded resource actions', async () => {
+test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded resource actions', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
 	await mkdir(join(home, '.claude'), {recursive: true});
@@ -65,11 +67,13 @@ test('managed TUI switches among Skills, Hooks, and Plugins with bounded resourc
 		/>,
 	);
 
-	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /Skills.*Hooks.*Plugins/);
+	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /Skills.*Hooks.*Plugins.*MCP/);
 	instance.stdin.write('\t');
 	assert.match(await waitForFrame(instance.lastFrame, /Stop.*command/), /Hooks/);
 	instance.stdin.write('\t');
 	assert.match(await waitForFrame(instance.lastFrame, /review@official/), /native-headless/);
+	instance.stdin.write('\t');
+	assert.match(await waitForFrame(instance.lastFrame, /node_repl/), /stdio.*enabled/);
 	instance.stdin.write('\t');
 	await waitForFrame(instance.lastFrame, /No Skills found/);
 	instance.stdin.write('\t');

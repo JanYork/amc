@@ -21,10 +21,13 @@ import {
 } from '../core/index.js';
 import {
 	editHook,
+	scanMcpServers,
 	scanHooks,
 	scanPlugins,
+	setMcpServerEnabled,
 	setPluginEnabled,
 	type HookResource,
+	type McpServerResource,
 	type PluginResource,
 	type ResourceContext,
 	type ResourceRuntime,
@@ -55,7 +58,10 @@ export type Command =
 	| Readonly<{kind: 'plugin-enable'; id: string}>
 	| Readonly<{kind: 'plugin-disable'; id: string}>
 	| Readonly<{kind: 'hooks-list'; page: number; limit: number; all: boolean; search: string | undefined}>
-	| Readonly<{kind: 'hook-edit'; id: string}>;
+	| Readonly<{kind: 'hook-edit'; id: string}>
+	| Readonly<{kind: 'mcp-list'; page: number; limit: number; all: boolean; search: string | undefined}>
+	| Readonly<{kind: 'mcp-enable'; id: string}>
+	| Readonly<{kind: 'mcp-disable'; id: string}>;
 
 export type HeadlessCommand = Exclude<Command, {kind: 'tui'}>;
 
@@ -83,6 +89,8 @@ Usage:
   amc plugins enable|disable <plugin-id>
   amc hooks list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
   amc hooks edit <hook-id>
+  amc mcp list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+  amc mcp enable|disable <mcp-id>
   amc --help
   amc --version`;
 
@@ -223,7 +231,8 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 		const kind = positionals[0];
 		switch (kind) {
 			case 'plugins':
-			case 'hooks': {
+			case 'hooks':
+			case 'mcp': {
 				const action = positionals[1];
 				if (hasTarget || hasSource || wantsDiagnostics || wantsYes) {
 					return usage(`${kind} does not accept target, source, diagnostics, or yes options`);
@@ -237,7 +246,7 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 						return usage(`${kind} list --search must not be empty`);
 					}
 					return {
-						kind: kind === 'plugins' ? 'plugins-list' : 'hooks-list',
+						kind: kind === 'plugins' ? 'plugins-list' : kind === 'hooks' ? 'hooks-list' : 'mcp-list',
 						page: parsePositiveInteger(values.page, '--page') ?? 1,
 						limit: parsePositiveInteger(values.limit, '--limit', 100) ?? 20,
 						all: wantsAll,
@@ -250,6 +259,10 @@ export function parseCommand(arguments_: ReadonlyArray<string>): Command {
 				if (kind === 'plugins' && (action === 'enable' || action === 'disable')) {
 					requirePositionals(positionals, 3);
 					return {kind: action === 'enable' ? 'plugin-enable' : 'plugin-disable', id: validateName(positionals[2])};
+				}
+				if (kind === 'mcp' && (action === 'enable' || action === 'disable')) {
+					requirePositionals(positionals, 3);
+					return {kind: action === 'enable' ? 'mcp-enable' : 'mcp-disable', id: validateName(positionals[2])};
 				}
 				if (kind === 'hooks' && action === 'edit') {
 					requirePositionals(positionals, 3);
@@ -388,6 +401,34 @@ function hookTable(hooks: ReadonlyArray<HookResource>, output: OutputContext): R
 				: [hook.id, hook.provider, hook.scope, hook.event, hook.type],
 			widths,
 			['muted', 'accent', undefined, undefined, undefined],
+			output,
+		));
+	}
+	lines.push(tableBorder(widths, {left: '└', separator: '┴', right: '┘'}, output));
+	return lines;
+}
+
+function mcpTable(servers: ReadonlyArray<McpServerResource>, output: OutputContext): ReadonlyArray<string> {
+	if (servers.length === 0) {
+		return ['No MCP servers found.'];
+	}
+	const compact = output.isTTY && output.columns < 68;
+	const longest = Math.max(8, ...servers.map(server => characterLength(server.name)));
+	const widths = compact
+		? [Math.max(8, Math.min(longest, output.columns - 27)), 1, 1, 5, 1]
+		: [output.isTTY ? Math.max(8, Math.min(longest, output.columns - 51)) : longest, 8, 7, 9, 9];
+	const lines = [
+		tableBorder(widths, {left: '┌', separator: '┬', right: '┐'}, output),
+		tableRow(compact ? ['SERVER', 'P', 'S', 'TYPE', 'E'] : ['SERVER', 'PROVIDER', 'SCOPE', 'TRANSPORT', 'STATE'], widths, ['bold', 'bold', 'bold', 'bold', 'bold'], output),
+		tableBorder(widths, {left: '├', separator: '┼', right: '┤'}, output),
+	];
+	for (const server of servers) {
+		lines.push(tableRow(
+			compact
+				? [server.name, server.provider.slice(0, 1).toUpperCase(), server.scope.slice(0, 1).toUpperCase(), server.transport, server.state === 'enabled' ? '●' : server.state === 'disabled' ? '○' : '?']
+				: [server.name, server.provider, server.scope, server.transport, server.state],
+			widths,
+			[undefined, 'accent', undefined, 'muted', server.state === 'enabled' ? 'enabled' : 'muted'],
 			output,
 		));
 	}
@@ -838,6 +879,24 @@ export async function executeCommand(
 			const {context, runtime} = requireResources(resources);
 			await editHook(context, runtime, command.id);
 			return `Edited hook source for ${command.id}.`;
+		}
+		case 'mcp-list': {
+			const {context, runtime} = requireResources(resources);
+			const result = await scanMcpServers(context, runtime);
+			const filtered = result.servers.filter(server => includesSearch(`${server.name}\n${server.provider}\n${server.scope}\n${server.transport}\n${server.state}`, command.search));
+			const page = paginate(filtered, command.page, command.limit, command.all);
+			return [
+				`${ansiRole('AMC', 'accent', output)} MCP · ${filtered.length} shown · ${result.diagnostics.length} warnings`,
+				'', ...mcpTable(page.rows, output), '', ...resourceFooter(page, 'amc mcp list'),
+				...(result.notes.length === 0 ? [] : ['', ...result.notes.map(note => `Note: ${note}`)]),
+			].join('\n');
+		}
+		case 'mcp-enable':
+		case 'mcp-disable': {
+			const {context, runtime} = requireResources(resources);
+			const enabled = command.kind === 'mcp-enable';
+			const server = await setMcpServerEnabled(context, runtime, command.id, enabled);
+			return `${enabled ? 'Enabled' : 'Disabled'} ${server.id}: ${server.state}`;
 		}
 	}
 }

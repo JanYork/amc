@@ -71,6 +71,9 @@ amc plugins enable <plugin-id>
 amc plugins disable <plugin-id>
 amc hooks list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
 amc hooks edit <hook-id>
+amc mcp list [--page <n>] [--limit <1-100>] [--search <text>] [--all]
+amc mcp enable <mcp-id>
+amc mcp disable <mcp-id>
 amc --help
 amc --version
 ```
@@ -86,9 +89,20 @@ operation to one Agent. Headless commands never prompt: success exits `0`, a
 filesystem or state conflict exits `1`, and invalid usage exits `2`.
 
 Plugin inventory comes from each provider's public CLI. Claude Code plugins
-can be enabled or disabled directly. For Codex, run `codex` and enter `/plugins`;
-for Pi, run `pi config`. AMC reports those steps instead of rewriting private
-state. Hook inventory is read-only, and `hooks edit` opens the selected
+use their native headless commands. Codex plugins use the documented
+`plugins.<id>.enabled` setting in `~/.codex/config.toml`; AMC backs up the file,
+writes it atomically, verifies the resulting inventory, and restores the
+original on failed verification. Pi package resources still require `pi config`.
+
+MCP inventory combines Claude Code's user, local, and project definitions with
+Codex's native JSON inventory. `mcp enable` and `mcp disable` preserve the
+server definition: Codex uses `mcp_servers.<id>.enabled`, while Claude records
+the current project's enablement state in `~/.claude.json`. AMC never prints
+MCP environment values, headers, OAuth tokens, or credentials. Pi deliberately
+has no native MCP registry; extension-provided MCP support is outside AMC's
+native MCP view.
+
+Hook inventory is read-only, and `hooks edit` opens the selected
 provider-owned source with `$VISUAL` or `$EDITOR`. AMC never executes a Hook
 while inspecting it; if neither variable is set, it reports how to configure one.
 
@@ -96,7 +110,7 @@ while inspecting it; if neither variable is set, it reports how to configure one
 
 | Key | Action |
 | --- | --- |
-| `Tab` | Switch Skills, Hooks, and Plugins |
+| `Tab` | Switch Skills, Hooks, Plugins, and MCP |
 | `↑` / `↓`, `j` / `k` | Move selection |
 | `Page Up` / `Page Down` | Move one visible page |
 | `Home` / `End` | Jump to first or last result |
@@ -112,9 +126,10 @@ while inspecting it; if neither variable is set, it reports how to configure one
 | `q` | Quit |
 
 In Hooks, press `e` to leave AMC and open the selected source file. In Plugins,
-press `Space` to toggle a Claude Code plugin; Codex and Pi show their required
-interactive command. All three views cap the visible list at 20 rows and
-support `/` search, arrows, `j`/`k`, `r`, and `q`.
+press `Space` to toggle a Claude Code or Codex plugin; Pi shows its required
+interactive command. In MCP, press `Space` to toggle a Claude Code or Codex
+server without removing its definition. All four views cap the visible list at
+20 rows and support `/` search, arrows, `j`/`k`, `r`, and `q`.
 
 AMC renders at most 20 Skill rows and keeps the selection visible while
 scrolling. The actual row count shrinks with terminal height. Below 44 columns

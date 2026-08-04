@@ -17,10 +17,13 @@ import {
 } from '../core/index.js';
 import {
 	editHook,
+	scanMcpServers,
 	scanHooks,
 	scanPlugins,
+	setMcpServerEnabled,
 	setPluginEnabled,
 	type HookResource,
+	type McpServerResource,
 	type PluginResource,
 	type ResourceContext,
 	type ResourceRuntime,
@@ -696,13 +699,15 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 	);
 }
 
-type Section = 'skills' | 'hooks' | 'plugins';
-type ResourceItem = HookResource | PluginResource;
+type Section = 'skills' | 'hooks' | 'plugins' | 'mcp';
+type ResourceItem = HookResource | PluginResource | McpServerResource;
 
 function itemSearch(item: ResourceItem): string {
 	return 'event' in item
 		? `${item.provider}\n${item.scope}\n${item.event}\n${item.type}\n${item.sourcePath}`
-		: `${item.provider}\n${item.name}\n${item.state}\n${item.capability}`;
+		: 'transport' in item
+			? `${item.provider}\n${item.name}\n${item.scope}\n${item.transport}\n${item.state}`
+			: `${item.provider}\n${item.name}\n${item.state}\n${item.capability}`;
 }
 
 function resourceCell(value: string, width: number): string {
@@ -744,8 +749,10 @@ function ResourceView({
 		try {
 			const result = section === 'hooks'
 				? await scanHooks(resources.context)
-				: await scanPlugins(resources.context, resources.runtime);
-			const rows: ReadonlyArray<ResourceItem> = 'hooks' in result ? result.hooks : result.plugins;
+				: section === 'plugins'
+					? await scanPlugins(resources.context, resources.runtime)
+					: await scanMcpServers(resources.context, resources.runtime);
+			const rows: ReadonlyArray<ResourceItem> = 'hooks' in result ? result.hooks : 'plugins' in result ? result.plugins : result.servers;
 			setItems(rows);
 			setSelectedId(current => {
 				return rows.some(item => item.id === current) ? current : rows[0]?.id;
@@ -758,6 +765,9 @@ function ResourceView({
 	}, [resources, section]);
 
 	useEffect(() => {
+		setItems([]);
+		setSelectedId(undefined);
+		setNotice({kind: 'info', text: 'Loading…'});
 		void refresh();
 	}, [refresh]);
 
@@ -816,7 +826,10 @@ function ResourceView({
 			return;
 		}
 		if (section === 'plugins' && input === ' ' && selected !== undefined && !('event' in selected)) {
-			if (selected.capability !== 'native-headless') {
+			if ('transport' in selected) {
+				return;
+			}
+			if (selected.capability === 'native-interactive' || selected.capability === 'unsupported') {
 				setNotice({kind: 'info', text: pluginInteractionSummary(selected)});
 				return;
 			}
@@ -824,6 +837,21 @@ function ResourceView({
 			void setPluginEnabled(resources.context, resources.runtime, selected.id, selected.state !== 'enabled')
 				.then(plugin => {
 					setNotice({kind: 'success', text: `${plugin.id}: ${plugin.state}`});
+					return refresh();
+				})
+				.catch((error: unknown) => {
+					setNotice({kind: 'error', text: errorText(error)});
+				})
+				.finally(() => {
+					setBusy(false);
+				});
+			return;
+		}
+		if (section === 'mcp' && input === ' ' && selected !== undefined && 'transport' in selected) {
+			setBusy(true);
+			void setMcpServerEnabled(resources.context, resources.runtime, selected.id, selected.state !== 'enabled')
+				.then(server => {
+					setNotice({kind: 'success', text: `${server.id}: ${server.state}`});
 					return refresh();
 				})
 				.catch((error: unknown) => {
@@ -851,19 +879,26 @@ function ResourceView({
 			<ThemedText color={palette.border}>{line}</ThemedText>
 			{section === 'plugins'
 				? <Text bold>{resourceCell('  Plugin', nameWidth)} │ Provider │ State     │ Management</Text>
-				: <Text bold>{resourceCell('  Event', nameWidth)} │ Provider │ Scope   │ Type      │ ID</Text>}
+				: section === 'mcp'
+					? <Text bold>{resourceCell('  MCP Server', nameWidth)} │ Provider │ Scope   │ Transport │ State</Text>
+					: <Text bold>{resourceCell('  Event', nameWidth)} │ Provider │ Scope   │ Type      │ ID</Text>}
 			<ThemedText color={palette.border}>{line}</ThemedText>
 			{shown.length === 0 ? <Text dimColor>No {section} found.</Text> : shown.map(item => {
 				const active = item.id === selected?.id;
 				if ('event' in item) {
 					return <ThemedText key={item.id} bold={active} color={active ? palette.accent : undefined} wrap="truncate-end">{resourceCell(`${active ? '› ' : '  '}${item.event}`, nameWidth)} │ {item.provider.padEnd(8)} │ {item.scope.padEnd(7)} │ {resourceCell(item.type, 9)} │ {item.id}</ThemedText>;
 				}
+				if ('transport' in item) {
+					return <ThemedText key={item.id} bold={active} color={active ? palette.accent : item.state === 'enabled' ? palette.enabled : undefined} wrap="truncate-end">{resourceCell(`${active ? '› ' : '  '}${item.name}`, nameWidth)} │ {item.provider.padEnd(8)} │ {item.scope.padEnd(7)} │ {item.transport.padEnd(9)} │ {item.state}</ThemedText>;
+				}
 				return <ThemedText key={item.id} bold={active} color={active ? palette.accent : item.state === 'enabled' ? palette.enabled : undefined} wrap="truncate-end">{resourceCell(`${active ? '› ' : '  '}${item.name}`, nameWidth)} │ {item.provider.padEnd(8)} │ {item.state.padEnd(9)} │ {item.capability}</ThemedText>;
 			})}
 			<ThemedText color={palette.border}>{line}</ThemedText>
 			{selected !== undefined && ('event' in selected
 				? <Text wrap="truncate-end"><ThemedText color={palette.muted}>Source: </ThemedText>{selected.sourcePath}</Text>
-				: <Text wrap="truncate-end"><ThemedText color={palette.muted}>Details: </ThemedText>version {selected.version ?? 'unknown'} · scope {selected.scope ?? 'unknown'} · {selected.capability === 'native-headless' ? 'Space toggles' : pluginInteractionSummary(selected)}</Text>)}
+				: 'transport' in selected
+					? <Text wrap="truncate-end"><ThemedText color={palette.muted}>Source: </ThemedText>{selected.sourcePath} · Space toggles</Text>
+					: <Text wrap="truncate-end"><ThemedText color={palette.muted}>Details: </ThemedText>version {selected.version ?? 'unknown'} · scope {selected.scope ?? 'unknown'} · {selected.capability === 'native-interactive' || selected.capability === 'unsupported' ? pluginInteractionSummary(selected) : 'Space toggles'}</Text>)}
 			<Box><Box flexGrow={1}><ThemedText color={palette.muted}>{filtered.length === 0 ? 0 : start + 1}–{Math.min(filtered.length, start + visibleRows)} / {filtered.length}</ThemedText></Box><ThemedText color={palette.muted}>↑↓ move  / search  {section === 'hooks' ? 'e edit' : 'Space toggle'}  r refresh</ThemedText></Box>
 			<ThemedText color={noticeColor(notice.kind, palette)} wrap="truncate-end">{busy ? 'Working…' : notice.text}</ThemedText>
 		</Box>
@@ -878,7 +913,7 @@ export function ManagedApp({layout, presentation, resources, windowSize, onHookE
 	const [section, setSection] = useState<Section>('skills');
 	useInput((input, key) => {
 		if (key.tab || input === '\t') {
-			setSection(current => current === 'skills' ? 'hooks' : current === 'hooks' ? 'plugins' : 'skills');
+			setSection(current => current === 'skills' ? 'hooks' : current === 'hooks' ? 'plugins' : current === 'plugins' ? 'mcp' : 'skills');
 		}
 	});
 	const edit = useCallback((id: string): void => {
@@ -887,10 +922,10 @@ export function ManagedApp({layout, presentation, resources, windowSize, onHookE
 	}, [exit, onHookEdit]);
 	return (
 		<Box flexDirection="column">
-		<Box><ThemedText bold color={section === 'skills' ? palette.accent : palette.muted}>Skills</ThemedText><Text>  </Text><ThemedText bold color={section === 'hooks' ? palette.accent : palette.muted}>Hooks</ThemedText><Text>  </Text><ThemedText bold color={section === 'plugins' ? palette.accent : palette.muted}>Plugins</ThemedText><ThemedText color={palette.muted}>  ·  Tab switch</ThemedText></Box>
+		<Box><ThemedText bold color={section === 'skills' ? palette.accent : palette.muted}>Skills</ThemedText><Text>  </Text><ThemedText bold color={section === 'hooks' ? palette.accent : palette.muted}>Hooks</ThemedText><Text>  </Text><ThemedText bold color={section === 'plugins' ? palette.accent : palette.muted}>Plugins</ThemedText><Text>  </Text><ThemedText bold color={section === 'mcp' ? palette.accent : palette.muted}>MCP</ThemedText><ThemedText color={palette.muted}>  ·  Tab switch</ThemedText></Box>
 		{section === 'skills'
 			? <App layout={layout} presentation={presentation} windowSize={{columns: dimensions.columns, rows: Math.max(1, dimensions.rows - 1)}}/>
-				: <ResourceView section={section} resources={resources} presentation={presentation} windowSize={{columns: dimensions.columns, rows: Math.max(1, dimensions.rows - 1)}} onHookEdit={edit}/>}
+				: <ResourceView key={section} section={section} resources={resources} presentation={presentation} windowSize={{columns: dimensions.columns, rows: Math.max(1, dimensions.rows - 1)}} onHookEdit={edit}/>}
 		</Box>
 	);
 }

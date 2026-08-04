@@ -1,11 +1,13 @@
 import assert from 'node:assert/strict';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {
 	editHook,
+	scanMcpServers,
 	scanHooks,
 	scanPlugins,
+	setMcpServerEnabled,
 	setPluginEnabled,
 	type ResourceContext,
 	type ResourceRuntime,
@@ -64,7 +66,7 @@ test('scanPlugins normalizes Claude, Codex, and Pi without hiding provider failu
 			version: '0.4.0',
 			scope: undefined,
 			state: 'disabled',
-			capability: 'native-interactive',
+			capability: 'config-edit',
 		},
 		{
 			id: 'pi:npm:pi-tools',
@@ -87,7 +89,7 @@ test('scanPlugins normalizes Claude, Codex, and Pi without hiding provider failu
 	assert.equal(partial.diagnostics[0]?.provider, 'codex');
 });
 
-test('setPluginEnabled mutates only Claude and confirms the resulting inventory', async () => {
+test('setPluginEnabled mutates Claude natively and Codex through backed-up config', async () => {
 	const calls: Array<Call> = [];
 	let enabled = false;
 	const runtime: ResourceRuntime = {
@@ -116,16 +118,109 @@ test('setPluginEnabled mutates only Claude and confirms the resulting inventory'
 		arguments_: ['plugin', 'enable', 'review@official', '--scope', 'user'],
 	});
 
-	const unsupportedCalls: Array<Call> = [];
+	const home = await createTestHome();
+	const configPath = join(home, '.codex', 'config.toml');
+	await mkdir(join(home, '.codex'), {recursive: true});
+	await writeFile(configPath, '[plugins."docs"]\nenabled = false\n', 'utf8');
+	const codexRuntime: ResourceRuntime = {
+		run: async program => {
+			if (program === 'codex') {
+				const config = await readFile(configPath, 'utf8');
+				return {exitCode: 0, stdout: JSON.stringify({installed: [{id: 'docs', enabled: /enabled = true/u.test(config)}]}), stderr: ''};
+			}
+			return {exitCode: 0, stdout: program === 'claude' ? '[]' : '', stderr: ''};
+		},
+		openEditor: () => Promise.resolve(),
+	};
+	const codex = await setPluginEnabled(contextFor(home), codexRuntime, 'codex:docs', true);
+	assert.equal(codex.state, 'enabled');
+	assert.match(await readFile(configPath, 'utf8'), /\[plugins\."docs"\]\nenabled = true/u);
+	assert.equal((await readdir(join(home, '.codex'))).some(name => name.startsWith('config.toml.amc-backup-')), true);
+});
+
+test('scanMcpServers normalizes Codex and Claude while reporting Pi as unsupported', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	await mkdir(context.cwd, {recursive: true});
+	await writeFile(join(home, '.claude.json'), JSON.stringify({
+		mcpServers: {codegraph: {command: 'codegraph', args: ['serve', '--mcp']}},
+		projects: {[context.cwd]: {disabledMcpServers: ['codegraph']}},
+	}), 'utf8');
+	await writeFile(join(context.cwd, '.mcp.json'), JSON.stringify({
+		mcpServers: {browser: {type: 'http', url: 'https://example.invalid/mcp'}},
+	}), 'utf8');
+	await mkdir(join(context.cwd, '.codex'), {recursive: true});
+	await writeFile(join(context.cwd, '.codex', 'config.toml'), '[mcp_servers.node_repl]\ncommand = "node"\n', 'utf8');
+	const runtime = runtimeWith({
+		'codex mcp list --json': JSON.stringify([
+			{name: 'node_repl', enabled: true, transport: {type: 'stdio'}},
+		]),
+	});
+
+	const result = await scanMcpServers(context, runtime);
+	assert.deepEqual(result.servers.map(server => [server.id, server.scope, server.transport, server.state, server.capability]), [
+		['claude:browser:project', 'project', 'http', 'enabled', 'config-edit'],
+		['claude:codegraph:user', 'user', 'stdio', 'disabled', 'config-edit'],
+		['codex:node_repl:project', 'project', 'stdio', 'enabled', 'config-edit'],
+	]);
+	assert.equal(result.notes.some(note => note.includes('Pi does not provide native MCP')), true);
+});
+
+test('setMcpServerEnabled updates Codex config atomically and confirms state', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const configPath = join(home, '.codex', 'config.toml');
+	await mkdir(join(home, '.codex'), {recursive: true});
+	await writeFile(configPath, '[mcp_servers.node_repl]\ncommand = "node"\nenabled = false\n', 'utf8');
+	const runtime: ResourceRuntime = {
+		run: async program => {
+			if (program !== 'codex') {
+				return {exitCode: 1, stdout: '', stderr: 'unexpected'};
+			}
+			const config = await readFile(configPath, 'utf8');
+			return {exitCode: 0, stdout: JSON.stringify([{name: 'node_repl', enabled: /enabled = true/u.test(config), transport: {type: 'stdio'}}]), stderr: ''};
+		},
+		openEditor: () => Promise.resolve(),
+	};
+
+	const changed = await setMcpServerEnabled(context, runtime, 'codex:node_repl:user', true);
+	assert.equal(changed.state, 'enabled');
+	assert.match(await readFile(configPath, 'utf8'), /enabled = true/u);
+});
+
+test('Codex config mutation restores the original when inventory confirmation fails', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const configPath = join(home, '.codex', 'config.toml');
+	const original = '[mcp_servers.node_repl]\ncommand = "node"\nenabled = false\n';
+	await mkdir(join(home, '.codex'), {recursive: true});
+	await writeFile(configPath, original, 'utf8');
+	const runtime = runtimeWith({
+		'codex mcp list --json': '[{"name":"node_repl","enabled":false,"transport":{"type":"stdio"}}]',
+	});
+
 	await assert.rejects(
-		setPluginEnabled(contextFor('/tmp/amc-home'), runtimeWith({
-			'claude plugin list --json': '[]',
-			'codex plugin list --json': '{"installed":[{"id":"docs","enabled":false}]}',
-			'pi list': '',
-		}, unsupportedCalls), 'codex:docs', true),
-		/INTERACTIVE_REQUIRED: Codex does not expose a headless plugin toggle\. Run `codex`, enter `\/plugins`, select `docs`, then press Space\./u,
+		setMcpServerEnabled(context, runtime, 'codex:node_repl:user', true),
+		/CONFIG_CONFIRMATION_FAILED: original config restored/u,
 	);
-	assert.equal(unsupportedCalls.some(call => call.arguments_.includes('enable')), false);
+	assert.equal(await readFile(configPath, 'utf8'), original);
+});
+
+test('setMcpServerEnabled persists a scoped Claude disable with a backup', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	await mkdir(context.cwd, {recursive: true});
+	const configPath = join(home, '.claude.json');
+	await writeFile(configPath, JSON.stringify({
+		mcpServers: {codegraph: {command: 'codegraph'}},
+		projects: {},
+	}), 'utf8');
+	const runtime = runtimeWith({'codex mcp list --json': '[]'});
+
+	const changed = await setMcpServerEnabled(context, runtime, 'claude:codegraph:user', false);
+	assert.equal(changed.state, 'disabled');
+	assert.match(await readFile(configPath, 'utf8'), /"disabledMcpServers": \[\s*"codegraph"/u);
+	assert.equal((await readdir(home)).some(name => name.startsWith('.claude.json.amc-backup-')), true);
 });
 
 test('scanHooks reads provider-owned config and Pi extensions without executing them', async () => {
