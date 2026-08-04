@@ -86,3 +86,83 @@ test('Ink TUI exposes divergence choice and non-destructive conflict errors', as
 	assert.equal(await resolvedLink(join(conflictLayout.targets.claude, 'delta')), foreign);
 	conflicted.unmount();
 });
+
+test('Ink TUI keeps a large list inside the terminal viewport while arrows and pages scroll', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	for (let index = 0; index < 30; index += 1) {
+		await writeSkill(layout.amc.skills, `item-${String(index).padStart(2, '0')}`);
+	}
+	const instance = render(<App layout={layout} windowSize={{columns: 80, rows: 12}}/>);
+
+	const first = await waitForFrame(instance.lastFrame, /› item-00/);
+	assert.equal(first.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 5);
+	assert.match(first, /1–5 \/ 30/);
+
+	for (let step = 0; step < 6; step += 1) {
+		instance.stdin.write('\u001B[B');
+	}
+	const scrolled = await waitForFrame(instance.lastFrame, /› item-06/);
+	assert.equal(scrolled.split('\n').filter(line => /item-\d{2}/u.test(line)).length, 5);
+	assert.doesNotMatch(scrolled, /item-00/);
+
+	instance.stdin.write('\u001B[6~');
+	assert.match(await waitForFrame(instance.lastFrame, /› item-11/), /↓ more/);
+	instance.stdin.write('\u001B[H');
+	assert.match(await waitForFrame(instance.lastFrame, /› item-00/), /1–5 \/ 30/);
+	instance.stdin.write('\u001B[F');
+	assert.match(await waitForFrame(instance.lastFrame, /› item-29/), /26–30 \/ 30/);
+	instance.unmount();
+});
+
+test('Ink TUI supports live search, clear, scope arrows, and help without growing the frame', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	for (let index = 0; index < 30; index += 1) {
+		await writeSkill(layout.amc.skills, `item-${String(index).padStart(2, '0')}`);
+	}
+	const instance = render(<App layout={layout} windowSize={{columns: 80, rows: 12}}/>);
+	await waitForFrame(instance.lastFrame, /› item-00/);
+
+	instance.stdin.write('/');
+	await waitForFrame(instance.lastFrame, /Search: —█/);
+	instance.stdin.write('item-2');
+	const searched = await waitForFrame(instance.lastFrame, /› item-20/);
+	assert.match(searched, /Search: item-2/);
+	assert.match(searched, /1–5 \/ 10/);
+	assert.ok(searched.split('\n').length <= 12, searched);
+
+	instance.stdin.write('\r');
+	await waitForFrame(instance.lastFrame, /Ready\./);
+	instance.stdin.write('\u001B');
+	assert.match(await waitForFrame(instance.lastFrame, /Search: —/), /30 Skills/);
+
+	instance.stdin.write('\u001B[C');
+	assert.match(await waitForFrame(instance.lastFrame, /Scope: Claude/), /› item-20|› item-00/);
+	instance.stdin.write('?');
+	const help = await waitForFrame(instance.lastFrame, /Keyboard/);
+	assert.match(help, /Page Up\/Down/);
+	assert.ok(help.split('\n').length <= 12, help);
+	instance.stdin.write('?');
+	assert.doesNotMatch(await waitForFrame(instance.lastFrame, /› item-00/), /Keyboard/);
+	instance.unmount();
+});
+
+test('Ink TUI truncates long rows and renders a bounded undersized-terminal message', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, `skill-${'long-name-'.repeat(10)}`);
+
+	const compact = render(<App layout={layout} windowSize={{columns: 44, rows: 10}}/>);
+	const compactFrame = await waitForFrame(compact.lastFrame, /skill-/);
+	assert.ok(compactFrame.split('\n').length <= 10, compactFrame);
+	assert.match(compactFrame, /…/);
+	compact.unmount();
+
+	const small = render(<App layout={layout} windowSize={{columns: 43, rows: 9}}/>);
+	const smallFrame = await waitForFrame(small.lastFrame, /Terminal too small/);
+	assert.match(smallFrame, /44×10/);
+	assert.doesNotMatch(smallFrame, /skill-long-name/);
+	assert.ok(smallFrame.split('\n').length <= 9, smallFrame);
+	small.unmount();
+});
