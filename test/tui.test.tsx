@@ -33,6 +33,33 @@ test('Ink TUI renders loading and empty states', async () => {
 	instance.unmount();
 });
 
+test('Ink TUI shows the selected Skill description and source path', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'alpha', `---
+name: alpha
+description: Reviews code for correctness and maintainability.
+---
+
+# Alpha
+`);
+	await writeSkill(layout.amc.skills, 'beta', `# Beta
+
+Creates a concise implementation plan.
+`);
+	const instance = render(
+		<App layout={layout} presentation={darkPresentation} windowSize={{columns: 100, rows: 16}}/>,
+	);
+
+	const frame = await waitForFrame(instance.lastFrame, /Description: Reviews code/);
+	assert.match(frame, /Source: .*alpha\/SKILL\.md/);
+	assert.ok(frame.split('\n').length <= 16, frame);
+	instance.stdin.write('j');
+	const nextFrame = await waitForFrame(instance.lastFrame, /Description: Creates a concise/);
+	assert.match(nextFrame, /Source: .*beta\/SKILL\.md/);
+	instance.unmount();
+});
+
 test('Ink TUI uses a one-cell focused fallback in mono mode', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);

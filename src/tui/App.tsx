@@ -5,11 +5,13 @@ import {
 	executeMigration,
 	listSkills,
 	planMigration,
+	readSkillDetails,
 	setSkillEnabled,
 	targets,
 	type Layout,
 	type MigrationPlan,
 	type Skill,
+	type SkillDetails,
 	type Target,
 	type TargetState,
 } from '../core/index.js';
@@ -306,6 +308,7 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 	const [notice, setNotice] = useState<Notice | undefined>();
 	const [modal, setModal] = useState<Modal | undefined>();
 	const [busy, setBusy] = useState(false);
+	const [details, setDetails] = useState<SkillDetails | null>();
 	const filteredSkills = useMemo(
 		() => skills === undefined ? undefined : filterSkills(skills, query),
 		[query, skills],
@@ -342,6 +345,29 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 			? current
 			: filteredSkills[0]?.name);
 	}, [filteredSkills]);
+
+	useEffect(() => {
+		if (selectedSkill === undefined) {
+			setDetails(null);
+			return;
+		}
+		let active = true;
+		setDetails(undefined);
+		void readSkillDetails(layout, selectedSkill.name)
+			.then(result => {
+				if (active) {
+					setDetails(result);
+				}
+			})
+			.catch(() => {
+				if (active) {
+					setDetails(null);
+				}
+			});
+		return () => {
+			active = false;
+		};
+	}, [layout, selectedSkill]);
 
 	const toggle = useCallback(async (
 		skill: Skill,
@@ -622,6 +648,12 @@ export function App({layout, presentation, windowSize}: AppProps): React.JSX.Ele
 						/>
 					))}
 					<TableBorder position="bottom" terminalLayout={terminalLayout} palette={palette}/>
+					{terminalLayout.showDetails && selectedSkill !== undefined && (
+						<>
+							<Box><ThemedText bold color={palette.accent}>Description: </ThemedText><Text wrap="truncate-end">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.description : 'Loading…'}</Text></Box>
+							<Box><ThemedText color={palette.muted}>Source: </ThemedText><ThemedText color={palette.muted} wrap="truncate-end">{details === null ? 'Unavailable.' : details?.name === selectedSkill.name ? details.sourcePath : 'Loading…'}</ThemedText></Box>
+						</>
+					)}
 					<Box>
 						<Box flexGrow={1}><ThemedText color={palette.muted}>{visibleStart}–{visibleEnd} / {filteredTotal}{hasRowsAbove ? '  ↑ more' : ''}{hasRowsBelow ? '  ↓ more' : ''}</ThemedText></Box>
 						<ThemedText color={palette.muted}>↑↓ move  ←→ scope  / search  ? help</ThemedText>

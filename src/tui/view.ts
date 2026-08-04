@@ -16,6 +16,7 @@ export type TerminalLayout =
 		kind: 'ready';
 		compact: boolean;
 		showLegend: boolean;
+		showDetails: boolean;
 		visibleRows: number;
 		skillWidth: number;
 		targetWidth: number;
@@ -39,12 +40,14 @@ export function layoutForTerminal(columns: number, rows: number): TerminalLayout
 
 	const compact = columns < 68;
 	const showLegend = rows > minimumRows;
+	const showDetails = rows >= 14;
 	const targetWidth = compact ? 5 : 10;
 	return {
 		kind: 'ready',
 		compact,
 		showLegend,
-		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - (showLegend ? 10 : 9))),
+		showDetails,
+		visibleRows: Math.min(maximumVisibleRows, Math.max(1, rows - (showLegend ? 10 : 9) - (showDetails ? 2 : 0))),
 		skillWidth: Math.max(1, columns - 13 - (targetWidth * 3)),
 		targetWidth,
 	};

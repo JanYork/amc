@@ -103,6 +103,10 @@ scrolling. The actual row count shrinks with terminal height. Below 44 columns
 or 10 rows it shows a bounded resize message instead of wrapping the list;
 only `q` remains active until the terminal is resized.
 
+When the terminal is at least 14 rows tall, AMC shows the selected Skill's
+description and source `SKILL.md` path below the table. Descriptions come from
+frontmatter, with the first body paragraph as a fallback.
+
 The bordered table highlights the selected scope and row. States use green
 `●` enabled, dim `○` disabled, yellow `◇` unmanaged, and red `!` conflict.
 

@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import {mkdir, symlink, writeFile} from 'node:fs/promises';
 import {basename, join} from 'node:path';
 import test from 'node:test';
-import {createLayout, listSkills, setSkillEnabled, targets} from '../src/core/index.js';
+import {createLayout, listSkills, readSkillDetails, setSkillEnabled, targets} from '../src/core/index.js';
 import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js';
 
 test('createLayout maps the canonical store and all three Agent targets', () => {
@@ -73,6 +73,51 @@ test('listSkills returns the sorted union with independent target states', async
 		['broken-only', 'junk'],
 	);
 	assert.equal(await pathExists(layout.amc.backups), false);
+});
+
+test('readSkillDetails reads inline and block frontmatter descriptions', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'alpha', `---
+name: alpha
+description: "Review code safely."
+---
+`);
+	await writeSkill(layout.amc.skills, 'beta', `---
+name: beta
+description: |
+  Build a plan first.
+  Then execute it.
+---
+`);
+
+	assert.deepEqual(await readSkillDetails(layout, 'alpha'), {
+		name: 'alpha',
+		description: 'Review code safely.',
+		sourcePath: join(layout.amc.skills, 'alpha', 'SKILL.md'),
+	});
+	assert.equal(
+		(await readSkillDetails(layout, 'beta')).description,
+		'Build a plan first. Then execute it.',
+	);
+});
+
+test('readSkillDetails falls back to body text and resolves an unmanaged source', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const source = await writeSkill(layout.targets.pi, 'gamma', `# Gamma
+
+Summarize the current project.
+
+## Instructions
+Ignore this later section.
+`);
+
+	assert.deepEqual(await readSkillDetails(layout, 'gamma'), {
+		name: 'gamma',
+		description: 'Summarize the current project.',
+		sourcePath: join(source, 'SKILL.md'),
+	});
 });
 
 test('setSkillEnabled enables every target by default and repeated enable is a no-op', async () => {

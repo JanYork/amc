@@ -42,6 +42,12 @@ export type Skill = Readonly<{
 	states: Readonly<Record<Target, TargetState>>;
 }>;
 
+export type SkillDetails = Readonly<{
+	name: string;
+	description: string;
+	sourcePath: string;
+}>;
+
 export type Diagnostic = Readonly<{
 	path: string;
 	message: string;
@@ -437,6 +443,112 @@ export async function listSkills(layout: Layout): Promise<ScanResult> {
 	].sort((left, right) => compareCodePoints(left.path, right.path));
 
 	return {skills, diagnostics};
+}
+
+function normalizeDescription(value: string): string {
+	return value.replaceAll(/\s+/gu, ' ').trim();
+}
+
+function inlineDescription(value: string): string {
+	const trimmed = value.trim();
+	if (trimmed.startsWith('"') && trimmed.endsWith('"')) {
+		try {
+			const parsed: unknown = JSON.parse(trimmed);
+			if (typeof parsed === 'string') {
+				return normalizeDescription(parsed);
+			}
+		} catch {
+			return normalizeDescription(trimmed.slice(1, -1));
+		}
+	}
+	if (trimmed.startsWith("'") && trimmed.endsWith("'")) {
+		return normalizeDescription(trimmed.slice(1, -1).replaceAll("''", "'"));
+	}
+	return normalizeDescription(trimmed);
+}
+
+function descriptionFromContent(content: string): string {
+	const lines = content.replace(/^\uFEFF/u, '').split(/\r?\n/u);
+	const frontmatterEnd = lines[0]?.trim() === '---'
+		? lines.findIndex((line, index) => index > 0 && line.trim() === '---')
+		: -1;
+
+	if (frontmatterEnd > 0) {
+		for (let index = 1; index < frontmatterEnd; index += 1) {
+			const match = /^description:\s*(.*)$/u.exec(lines[index] ?? '');
+			if (match === null) {
+				continue;
+			}
+			const value = match[1] ?? '';
+			if (/^[>|][+-]?$/u.test(value.trim())) {
+				const block: string[] = [];
+				for (let blockIndex = index + 1; blockIndex < frontmatterEnd; blockIndex += 1) {
+					const line = lines[blockIndex] ?? '';
+					if (line.length > 0 && !/^\s/u.test(line)) {
+						break;
+					}
+					block.push(line.trim());
+				}
+				const description = normalizeDescription(block.join(' '));
+				if (description.length > 0) {
+					return description;
+				}
+			} else {
+				const description = inlineDescription(value);
+				if (description.length > 0) {
+					return description;
+				}
+			}
+			break;
+		}
+	}
+
+	const body = lines.slice(frontmatterEnd > 0 ? frontmatterEnd + 1 : 0);
+	const paragraph: string[] = [];
+	for (const line of body) {
+		const trimmed = line.trim();
+		if (trimmed.length === 0) {
+			if (paragraph.length > 0) {
+				break;
+			}
+			continue;
+		}
+		if (paragraph.length === 0 && (trimmed.startsWith('#') || trimmed.startsWith('<!--'))) {
+			continue;
+		}
+		paragraph.push(trimmed);
+	}
+	return normalizeDescription(paragraph.join(' ')) || 'No description provided.';
+}
+
+export async function readSkillDetails(layout: Layout, name: string): Promise<SkillDetails> {
+	validateSkillName(name);
+	const canonicalPath = join(layout.amc.skills, name);
+	let contentPath: string | undefined;
+	if (await isSkillDirectory(canonicalPath)) {
+		contentPath = canonicalPath;
+	} else {
+		for (const target of targets) {
+			const observation = await observeTargetPath(
+				join(layout.targets[target], name),
+				canonicalPath,
+				false,
+			);
+			if (observation.state === 'unmanaged') {
+				contentPath = observation.contentPath;
+				break;
+			}
+		}
+	}
+	if (contentPath === undefined) {
+		throw new AmcError('CANONICAL_MISSING', `Skill is not readable: ${name}`, canonicalPath);
+	}
+	const sourcePath = join(contentPath, 'SKILL.md');
+	return {
+		name,
+		description: descriptionFromContent(await readFile(sourcePath, 'utf8')),
+		sourcePath,
+	};
 }
 
 function validateSkillName(name: string): void {
