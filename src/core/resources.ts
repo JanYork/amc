@@ -1,7 +1,7 @@
 import {createHash, randomUUID} from 'node:crypto';
 import {constants} from 'node:fs';
 import {copyFile, mkdir, readdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
-import {basename, dirname, extname, join} from 'node:path';
+import {basename, dirname, extname, join, relative, resolve, sep} from 'node:path';
 import type {Target} from './index.js';
 
 export type ManagementCapability =
@@ -616,7 +616,8 @@ function hookType(value: unknown): string {
 	return isObject(value) ? stringField(value, 'type') ?? 'unknown' : 'unknown';
 }
 
-function claudeHooks(
+function eventHooks(
+	provider: 'claude' | 'codex',
 	value: unknown,
 	path: string,
 	scope: ResourceScope,
@@ -635,8 +636,8 @@ function claudeHooks(
 			}
 			group['hooks'].forEach((hook, hookIndex) => {
 				hooks.push({
-					id: hookId(['claude', scope, path, event, `${groupIndex}`, `${hookIndex}`]),
-					provider: 'claude',
+					id: hookId([provider, scope, path, event, `${groupIndex}`, `${hookIndex}`]),
+					provider,
 					scope,
 					event,
 					type: hookType(hook),
@@ -654,7 +655,13 @@ function codexHooks(
 	path: string,
 	scope: ResourceScope,
 ): ReadonlyArray<HookResource> {
-	if (!isObject(value) || !isUnknownArray(value['hooks'])) {
+	if (!isObject(value)) {
+		return [];
+	}
+	if (isObject(value['hooks'])) {
+		return eventHooks('codex', value, path, scope);
+	}
+	if (!isUnknownArray(value['hooks'])) {
 		return [];
 	}
 	return value['hooks'].flatMap((hook, index) => {
@@ -674,6 +681,80 @@ function codexHooks(
 	});
 }
 
+function pluginRoot(home: string, plugin: JsonObject): string | undefined {
+	const marketplace = stringField(plugin, 'marketplaceName');
+	const name = stringField(plugin, 'name');
+	const version = stringField(plugin, 'version');
+	if (marketplace !== undefined && name !== undefined && version !== undefined) {
+		return join(home, '.codex', 'plugins', 'cache', marketplace, name, version);
+	}
+	const source = plugin['source'];
+	return isObject(source) ? stringField(source, 'path') : undefined;
+}
+
+function containedPath(root: string, child: string): string | undefined {
+	const path = resolve(root, child);
+	const offset = relative(root, path);
+	return offset === '..' || offset.startsWith(`..${sep}`) ? undefined : path;
+}
+
+async function codexPluginHooks(
+	context: ResourceContext,
+	runtime: ResourceRuntime,
+): Promise<HookScanResult> {
+	const inventory = await runtime.run('codex', ['plugin', 'list', '--json']);
+	if (inventory.exitCode !== 0) {
+		return {hooks: [], diagnostics: [pluginDiagnostic('codex', inventory.stderr.trim() || `exit ${inventory.exitCode}`)]};
+	}
+	let value: unknown;
+	try {
+		value = parseJson(inventory.stdout);
+	} catch (error: unknown) {
+		return {hooks: [], diagnostics: [pluginDiagnostic('codex', error instanceof Error ? error.message : 'invalid plugin inventory')]};
+	}
+	if (!isObject(value) || !isUnknownArray(value['installed'])) {
+		return {hooks: [], diagnostics: [pluginDiagnostic('codex', 'expected an installed JSON array')]};
+	}
+	const sources = await Promise.all(value['installed'].flatMap(plugin => {
+		if (!isObject(plugin) || booleanField(plugin, 'enabled') !== true) {
+			return [];
+		}
+		const root = pluginRoot(context.home, plugin);
+		if (root === undefined) {
+			return [];
+		}
+		return [readCodexPluginHooks(root, scopeField(plugin['scope']) ?? 'user')];
+	}));
+	return {
+		hooks: sources.flatMap(source => source.hooks),
+		diagnostics: sources.flatMap(source => source.diagnostic === undefined ? [] : [source.diagnostic]),
+	};
+}
+
+async function readCodexPluginHooks(
+	root: string,
+	scope: ResourceScope,
+): Promise<Readonly<{hooks: ReadonlyArray<HookResource>; diagnostic: ResourceDiagnostic | undefined}>> {
+	const manifestPath = join(root, '.codex-plugin', 'plugin.json');
+	try {
+		const manifest = parseJson(await readFile(manifestPath, 'utf8'));
+		if (!isObject(manifest)) {
+			return {hooks: [], diagnostic: {provider: 'codex', path: manifestPath, message: 'invalid plugin manifest'}};
+		}
+		const configured = stringField(manifest, 'hooks') ?? 'hooks/hooks.json';
+		const path = containedPath(root, configured);
+		if (path === undefined) {
+			return {hooks: [], diagnostic: {provider: 'codex', path: manifestPath, message: 'hook path escapes plugin root'}};
+		}
+		return jsonHooks('codex', path, scope);
+	} catch (error: unknown) {
+		if (hasErrorCode(error, 'ENOENT')) {
+			return {hooks: [], diagnostic: undefined};
+		}
+		return {hooks: [], diagnostic: {provider: 'codex', path: manifestPath, message: error instanceof Error ? error.message : 'read failed'}};
+	}
+}
+
 function hasErrorCode(error: unknown, code: string): boolean {
 	return error instanceof Error && 'code' in error && error.code === code;
 }
@@ -686,7 +767,7 @@ async function jsonHooks(
 	try {
 		const value = parseJson(await readFile(path, 'utf8'));
 		return {
-			hooks: provider === 'claude' ? claudeHooks(value, path, scope) : codexHooks(value, path, scope),
+			hooks: provider === 'claude' ? eventHooks('claude', value, path, scope) : codexHooks(value, path, scope),
 			diagnostic: undefined,
 		};
 	} catch (error: unknown) {
@@ -746,7 +827,7 @@ async function piExtensions(
 	}
 }
 
-export async function scanHooks(context: ResourceContext): Promise<HookScanResult> {
+export async function scanHooks(context: ResourceContext, runtime: ResourceRuntime): Promise<HookScanResult> {
 	const sources = await Promise.all([
 		jsonHooks('claude', join(context.home, '.claude', 'settings.json'), 'user'),
 		jsonHooks('claude', join(context.cwd, '.claude', 'settings.json'), 'project'),
@@ -756,10 +837,11 @@ export async function scanHooks(context: ResourceContext): Promise<HookScanResul
 		piExtensions(join(context.home, '.pi', 'agent', 'extensions'), 'user'),
 		piExtensions(join(context.cwd, '.pi', 'extensions'), 'project'),
 	]);
+	const pluginHooks = await codexPluginHooks(context, runtime);
 	return {
-		hooks: sources.flatMap(source => source.hooks)
+		hooks: [...sources.flatMap(source => source.hooks), ...pluginHooks.hooks]
 			.sort((left, right) => left.provider.localeCompare(right.provider) || basename(left.sourcePath).localeCompare(basename(right.sourcePath)) || left.event.localeCompare(right.event)),
-		diagnostics: sources.flatMap(source => source.diagnostic === undefined ? [] : [source.diagnostic]),
+		diagnostics: [...sources.flatMap(source => source.diagnostic === undefined ? [] : [source.diagnostic]), ...pluginHooks.diagnostics],
 	};
 }
 
@@ -768,7 +850,7 @@ export async function editHook(
 	runtime: ResourceRuntime,
 	id: string,
 ): Promise<void> {
-	const hook = (await scanHooks(context)).hooks.find(candidate => candidate.id === id);
+	const hook = (await scanHooks(context, runtime)).hooks.find(candidate => candidate.id === id);
 	if (hook === undefined) {
 		throw new Error(`HOOK_NOT_FOUND: ${id}`);
 	}

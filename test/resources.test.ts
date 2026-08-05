@@ -241,7 +241,9 @@ test('scanHooks reads provider-owned config and Pi extensions without executing 
 	await mkdir(join(home, '.pi', 'agent', 'extensions', 'bundle'), {recursive: true});
 	await writeFile(join(home, '.pi', 'agent', 'extensions', 'bundle', 'index.ts'), 'export default function bundle() {}\n', 'utf8');
 
-	const result = await scanHooks(context);
+	const result = await scanHooks(context, runtimeWith({
+		'codex plugin list --json': '{"installed":[]}',
+	}));
 
 	assert.deepEqual(result.hooks.map(hook => [hook.provider, hook.scope, hook.event, hook.type]), [
 		['claude', 'user', 'PostToolUse', 'command'],
@@ -252,6 +254,41 @@ test('scanHooks reads provider-owned config and Pi extensions without executing 
 	assert.equal(result.hooks.every(hook => /^[a-f0-9]{16}$/u.test(hook.id)), true);
 	assert.equal(result.diagnostics.length, 1);
 	assert.match(result.diagnostics[0]?.message ?? '', /invalid JSON/iu);
+});
+
+test('scanHooks includes hooks from enabled Codex plugins', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const pluginRoot = join(home, '.codex', 'plugins', 'cache', 'acme', 'guard', '1.2.3');
+	await mkdir(join(pluginRoot, '.codex-plugin'), {recursive: true});
+	await mkdir(join(pluginRoot, 'hooks'), {recursive: true});
+	await writeFile(join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({
+		name: 'guard',
+		version: '1.2.3',
+		hooks: './hooks/hooks.json',
+	}), 'utf8');
+	await writeFile(join(pluginRoot, 'hooks', 'hooks.json'), JSON.stringify({
+		hooks: {
+			SessionStart: [{hooks: [{type: 'command'}]}],
+			UserPromptSubmit: [{hooks: [{type: 'command'}]}],
+		},
+	}), 'utf8');
+	const runtime = runtimeWith({
+		'codex plugin list --json': JSON.stringify({installed: [{
+			pluginId: 'guard@acme',
+			name: 'guard',
+			marketplaceName: 'acme',
+			version: '1.2.3',
+			enabled: true,
+		}]}),
+	});
+
+	const result = await scanHooks(context, runtime);
+
+	assert.deepEqual(result.hooks.map(hook => [hook.provider, hook.scope, hook.event, hook.type]), [
+		['codex', 'user', 'SessionStart', 'command'],
+		['codex', 'user', 'UserPromptSubmit', 'command'],
+	]);
 });
 
 test('editHook opens the exact source file selected from a fresh inventory', async () => {
@@ -265,10 +302,10 @@ test('editHook opens the exact source file selected from a fresh inventory', asy
 		'codex plugin list --json': '{"installed":[]}',
 		'pi list': '',
 	}, calls);
-	const inventory = await scanHooks(contextFor(home));
+	const inventory = await scanHooks(contextFor(home), runtime);
 	const hook = inventory.hooks[0];
 	assert.ok(hook);
 
 	await editHook(contextFor(home), runtime, hook.id);
-	assert.deepEqual(calls, [{program: 'editor', arguments_: [sourcePath]}]);
+	assert.deepEqual(calls.filter(call => call.program === 'editor'), [{program: 'editor', arguments_: [sourcePath]}]);
 });

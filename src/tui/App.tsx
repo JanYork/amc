@@ -748,7 +748,7 @@ function ResourceView({
 	const refresh = useCallback(async (): Promise<void> => {
 		try {
 			const result = section === 'hooks'
-				? await scanHooks(resources.context)
+				? await scanHooks(resources.context, resources.runtime)
 				: section === 'plugins'
 					? await scanPlugins(resources.context, resources.runtime)
 					: await scanMcpServers(resources.context, resources.runtime);

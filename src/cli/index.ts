@@ -866,8 +866,8 @@ export async function executeCommand(
 			return `${enabled ? 'Enabled' : 'Disabled'} ${plugin.id}: ${plugin.state}`;
 		}
 		case 'hooks-list': {
-			const {context} = requireResources(resources);
-			const result = await scanHooks(context);
+			const {context, runtime} = requireResources(resources);
+			const result = await scanHooks(context, runtime);
 			const filtered = result.hooks.filter(hook => includesSearch(`${hook.provider}\n${hook.event}\n${hook.type}\n${hook.sourcePath}`, command.search));
 			const page = paginate(filtered, command.page, command.limit, command.all);
 			return [
