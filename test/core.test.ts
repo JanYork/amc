@@ -195,6 +195,21 @@ test('setSkillEnabled aborts every selected target before writes on conflict', a
 	assert.equal(await pathExists(join(layout.targets.codex, 'alpha')), false);
 });
 
+test('setSkillEnabled blocks duplicate Pi and Codex links when the shared discovery path is occupied', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'alpha', 'canonical');
+	const shared = await writeSkill(join(home, '.agents', 'skills'), 'alpha', 'shared');
+
+	await assert.rejects(setSkillEnabled(layout, 'alpha', true, ['pi', 'codex']), {
+		name: 'AmcError',
+		code: 'TARGET_BLOCKED',
+		path: shared,
+	});
+	assert.equal(await pathExists(join(layout.targets.pi, 'alpha')), false);
+	assert.equal(await pathExists(join(layout.targets.codex, 'alpha')), false);
+});
+
 test('setSkillEnabled detects every parking collision before disabling any target', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);

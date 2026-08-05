@@ -593,6 +593,15 @@ async function planToggle(
 	const targetPath = join(layout.targets[target], name);
 	const parkedPath = join(layout.amc.disabledLinks, target, name);
 	const state = await classifyTargetPath(targetPath, canonicalPath);
+	const sharedPath = join(layout.home, '.agents', 'skills', name);
+
+	if (enabled && (target === 'pi' || target === 'codex') && await isSkillDirectory(sharedPath)) {
+		throw new AmcError(
+			'TARGET_BLOCKED',
+			`Shared Skill path is already discovered by ${target}. Reconcile it before enabling a second link.`,
+			sharedPath,
+		);
+	}
 
 	if (state === 'unmanaged' || state === 'conflict') {
 		throw new AmcError('TARGET_BLOCKED', `Target ${target} is ${state}.`, targetPath);
