@@ -1,6 +1,6 @@
 {
   "name": "@i-xor/amc",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Manage shared Agent Skills from one local store.",
   "type": "module",
   "bin": {
