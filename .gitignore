@@ -1,4 +1,22 @@
+# Dependencies and generated artifacts
 node_modules/
 dist/
-.superpowers/
+coverage/
+.cache/
+*.log
+*.tgz
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
 
+# Local credentials and environment overrides
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor and operating-system metadata
+.DS_Store
+.idea/
+.vscode/

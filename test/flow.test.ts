@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import {spawnSync} from 'node:child_process';
-import {mkdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {executeCommand} from '../src/cli/index.js';
@@ -10,12 +10,24 @@ import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js
 
 const binary = join(process.cwd(), 'dist', 'src', 'main.js');
 
-function runBinary(home: string, arguments_: ReadonlyArray<string>) {
+function runBinary(home: string, arguments_: ReadonlyArray<string>, input?: string) {
 	return spawnSync(process.execPath, [binary, ...arguments_], {
 		encoding: 'utf8',
 		env: {...process.env, HOME: home},
+		input,
 	});
 }
+
+test('compiled CLI persists a GitHub Token from stdin without echoing it', async () => {
+	const home = await createTestHome();
+	const secret = 'github_pat_compiled_abcdefghijklmnopqrstuvwxyz';
+	const result = runBinary(home, ['auth', 'github', 'set', '--token-stdin'], `${secret}\n`);
+	assert.equal(result.status, 0, result.stderr);
+	assert.equal(result.stdout, 'GitHub Token configured.\n');
+	assert.equal(result.stdout.includes(secret), false);
+	assert.equal(result.stderr.includes(secret), false);
+	assert.equal(await readFile(join(home, '.amc', 'credentials', 'github-token'), 'utf8'), `${secret}\n`);
+});
 
 test('headless list formats the exact core state without creating stores', async () => {
 	const home = await createTestHome();
@@ -151,6 +163,28 @@ test('interactive list uses table borders and ANSI emphasis', async () => {
 	assert.doesNotMatch(output, /\u001B\[[^m]*36m/u);
 });
 
+test('headless plugin list reports Pi packages as installed and interactive', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const runtime: ResourceRuntime = {
+		run: program => Promise.resolve({
+			exitCode: 0,
+			stdout: program === 'pi'
+				? 'User packages:\n  npm:pi-tools@1.2.3\n    /tmp/pi-tools\n'
+				: program === 'claude' ? '[]' : '{"installed":[]}',
+			stderr: '',
+		}),
+		openEditor: () => Promise.resolve(),
+	};
+	const output = await executeCommand(layout, {
+		kind: 'plugins-list', page: 1, limit: 20, all: false, search: undefined,
+	}, undefined, {context: {home, cwd: home}, runtime});
+
+	assert.match(output, /^AMC Plugins · 1 shown · 0 warnings/mu);
+	assert.match(output, /npm:pi-tools@1\.2\.3.*pi.*installed.*native-interactive/u);
+	assert.doesNotMatch(output, /unknown/u);
+});
+
 test('headless MCP list is paginated, searchable, and never prints transport secrets', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
@@ -227,6 +261,73 @@ test('compiled binary supports help, empty list, and usage exit codes in an isol
 	const invalid = runBinary(home, ['enable']);
 	assert.equal(invalid.status, 2);
 	assert.match(invalid.stderr, /Invalid command arguments/);
+});
+
+test('headless list reports shared effective discovery instead of disabled links', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.sources.agents, 'alpha', 'shared');
+
+	const output = await executeCommand(layout, {
+		kind: 'list', page: 1, limit: 20, all: false, search: undefined, diagnostics: false,
+	});
+
+	assert.match(output, /alpha\s+│\s+disabled\s+│\s+shared\s+│\s+shared/u);
+	assert.equal(await pathExists(layout.amc.root), false);
+});
+
+test('headless reconcile preview is read-only and explicit apply adopts shared Skills', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.sources.agents, 'alpha', 'shared alpha');
+
+	const preview = await executeCommand(layout, {kind: 'reconcile', apply: false, name: undefined, source: undefined});
+	assert.match(preview, /alpha\s+ready\s+pi,codex\s+agents/u);
+	assert.equal(await pathExists(layout.amc.root), false);
+
+	const applied = await executeCommand(layout, {kind: 'reconcile', apply: true, name: undefined, source: undefined});
+	assert.match(applied, /Reconciled 1 Skills/u);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'alpha')), join(layout.amc.skills, 'alpha'));
+});
+
+test('compiled reconcile preview stays read-only and explicit apply splits shared discovery', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.sources.agent, 'alpha', 'compiled shared');
+
+	const preview = runBinary(home, ['reconcile']);
+	assert.equal(preview.status, 0, preview.stderr);
+	assert.match(preview.stdout, /alpha\s+ready\s+pi,codex\s+agent/u);
+	assert.equal(await pathExists(layout.amc.root), false);
+
+	const applied = runBinary(home, ['reconcile', '--apply', '--yes']);
+	assert.equal(applied.status, 0, applied.stderr);
+	assert.match(applied.stdout, /Reconciled 1 Skills/u);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await pathExists(join(layout.sources.agent, 'alpha')), false);
+});
+
+test('compiled reconcile resolves an exact divergent source and supports prototype toggles', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.sources.agents, 'alpha', 'shared');
+	await writeSkill(layout.sources.claude, 'alpha', 'claude');
+
+	const resolved = runBinary(home, ['reconcile', 'alpha', '--source', 'claude', '--apply', '--yes']);
+	assert.equal(resolved.status, 0, resolved.stderr);
+	assert.match(resolved.stdout, /Reconciled alpha/u);
+	assert.equal(await readFile(join(layout.amc.skills, 'alpha', 'SKILL.md'), 'utf8'), 'claude');
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'alpha')), join(layout.amc.skills, 'alpha'));
+
+	await writeSkill(layout.amc.skills, 'prototype', 'prototype');
+	const enabled = runBinary(home, ['enable', 'prototype', '--target', 'claude']);
+	assert.equal(enabled.status, 0, enabled.stderr);
+	const disabled = runBinary(home, ['disable', 'prototype', '--target', 'claude']);
+	assert.equal(disabled.status, 0, disabled.stderr);
+	assert.equal(await pathExists(join(layout.targets.claude, 'prototype')), false);
 });
 
 test('compiled bulk migrate dry run is read-only and apply mode adopts only ready Skills', async () => {

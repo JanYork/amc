@@ -5,7 +5,7 @@ import test from 'node:test';
 import {createLayout, listSkills, readSkillDetails, setSkillEnabled, targets} from '../src/core/index.js';
 import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js';
 
-test('createLayout maps the canonical store and all three Agent targets', () => {
+test('createLayout maps canonical, provider targets, and approved Skill sources', () => {
 	assert.deepEqual(createLayout('/tmp/amc-home'), {
 		home: '/tmp/amc-home',
 		amc: {
@@ -15,8 +15,22 @@ test('createLayout maps the canonical store and all three Agent targets', () => 
 			disabledLinks: '/tmp/amc-home/.amc/disabled-links',
 			staging: '/tmp/amc-home/.amc/staging',
 			failed: '/tmp/amc-home/.amc/failed',
+			marketplace: '/tmp/amc-home/.amc/marketplace.json',
+			skillsLock: '/tmp/amc-home/.amc/skills-lock.json',
+			deleteJournals: '/tmp/amc-home/.amc/delete-journals',
+			reconcileJournals: '/tmp/amc-home/.amc/reconcile-journals',
+			credentials: '/tmp/amc-home/.amc/credentials',
+			githubAuth: '/tmp/amc-home/.amc/github-auth.json',
+			githubToken: '/tmp/amc-home/.amc/credentials/github-token',
 		},
 		targets: {
+			claude: '/tmp/amc-home/.claude/skills',
+			pi: '/tmp/amc-home/.pi/agent/skills',
+			codex: '/tmp/amc-home/.codex/skills',
+		},
+		sources: {
+			agents: '/tmp/amc-home/.agents/skills',
+			agent: '/tmp/amc-home/.agent/skills',
 			claude: '/tmp/amc-home/.claude/skills',
 			pi: '/tmp/amc-home/.pi/agent/skills',
 			codex: '/tmp/amc-home/.codex/skills',
@@ -30,6 +44,8 @@ test('listSkills treats missing stores as empty and remains read-only', async ()
 
 	assert.deepEqual(await listSkills(layout), {skills: [], diagnostics: []});
 	assert.equal(await pathExists(layout.amc.root), false);
+	assert.equal(await pathExists(join(home, '.agent')), false);
+	assert.equal(await pathExists(join(home, '.agents')), false);
 	assert.equal(await pathExists(join(home, '.claude')), false);
 	assert.equal(await pathExists(join(home, '.pi')), false);
 	assert.equal(await pathExists(join(home, '.codex')), false);
@@ -208,6 +224,28 @@ test('setSkillEnabled blocks duplicate Pi and Codex links when the shared discov
 	});
 	assert.equal(await pathExists(join(layout.targets.pi, 'alpha')), false);
 	assert.equal(await pathExists(join(layout.targets.codex, 'alpha')), false);
+});
+
+test('setSkillEnabled self-heals duplicate AMC-owned active and parked links', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const canonical = await writeSkill(layout.amc.skills, 'alpha');
+	for (const target of ['pi', 'codex'] as const) {
+		await mkdir(layout.targets[target], {recursive: true});
+		await mkdir(join(layout.amc.disabledLinks, target), {recursive: true});
+		await symlink(canonical, join(layout.targets[target], 'alpha'));
+		await symlink(canonical, join(layout.amc.disabledLinks, target, 'alpha'));
+	}
+
+	const enabled = await setSkillEnabled(layout, 'alpha', true, ['pi']);
+	assert.equal(enabled.changes[0]?.changed, true);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), canonical);
+	assert.equal(await pathExists(join(layout.amc.disabledLinks, 'pi', 'alpha')), false);
+
+	const disabled = await setSkillEnabled(layout, 'alpha', false, ['codex']);
+	assert.equal(disabled.changes[0]?.changed, true);
+	assert.equal(await pathExists(join(layout.targets.codex, 'alpha')), false);
+	assert.equal(await resolvedLink(join(layout.amc.disabledLinks, 'codex', 'alpha')), canonical);
 });
 
 test('setSkillEnabled detects every parking collision before disabling any target', async () => {

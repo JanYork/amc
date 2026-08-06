@@ -160,7 +160,11 @@ const scanSourceFile = (
 			pushFinding(findings, node, 'core must not access process');
 		}
 
-		if (isCallExpression(node) && isForbiddenCall(node)) {
+		if (
+			isCallExpression(node)
+			&& isForbiddenCall(node)
+			&& !(relativePath === 'core/skills/permanent-delete.ts' && isIdentifier(node.expression) && node.expression.text === 'rm')
+		) {
 			pushFinding(findings, node.expression, 'rm/rmdir/unlink call is forbidden');
 		}
 
@@ -201,10 +205,47 @@ test('production source stays within the agreed type-safety and layer boundaries
 		findings.map(formatFinding).join('\n'),
 	);
 
-	const coreSource = await readFile(join(sourceRoot, 'core', 'index.ts'), 'utf8');
+	const extractedCoreFileNames = [
+		join(sourceRoot, 'core', 'index.ts'),
+		join(sourceRoot, 'core', 'model.ts'),
+		join(sourceRoot, 'core', 'layout.ts'),
+		join(sourceRoot, 'core', 'skills', 'scan.ts'),
+		join(sourceRoot, 'core', 'skills', 'toggle.ts'),
+		join(sourceRoot, 'core', 'skills', 'migration.ts'),
+		join(sourceRoot, 'core', 'skills', 'reconcile.ts'),
+		join(sourceRoot, 'core', 'skills', 'permanent-delete.ts'),
+	];
+	const coreSources = await Promise.all(
+		extractedCoreFileNames.map(async fileName => readFile(fileName, 'utf8')),
+	);
+	const renameCallCount = coreSources.reduce(
+		(count, source) => count + (source.match(/\brename\(/gu)?.length ?? 0),
+		0,
+	);
+	const migrationSource = await readFile(join(sourceRoot, 'core', 'skills', 'migration.ts'), 'utf8');
+	const reconcileSource = await readFile(join(sourceRoot, 'core', 'skills', 'reconcile.ts'), 'utf8');
+	assert.equal(renameCallCount, 1, 'rename() must have exactly one core call site');
 	assert.equal(
-		coreSource.match(/\brename\(/gu)?.length,
+		migrationSource.match(/\brename\(/gu)?.length,
 		1,
 		'rename() must be centralized behind the operation-root safety helper',
+	);
+	assert.equal(reconcileSource.match(/\bcp\(/gu)?.length ?? 0, 0, 'reconciliation must move, not copy, canonical Skill content');
+	const allProductionSources = await Promise.all(fileNames.map(async fileName => readFile(fileName, 'utf8')));
+	const deleteCallCount = coreSources.reduce(
+		(count, source) => count + (source.match(/\brm\(/gu)?.length ?? 0),
+		0,
+	);
+	const destructiveTokenCount = allProductionSources.reduce(
+		(count, source) => count + (source.match(/\b(?:rm|rmdir|unlink)\b/gu)?.length ?? 0),
+		0,
+	);
+	const permanentDeleteSource = await readFile(join(sourceRoot, 'core', 'skills', 'permanent-delete.ts'), 'utf8');
+	assert.equal(deleteCallCount, 1, 'rm() must have exactly one approved core call site');
+	assert.equal(destructiveTokenCount, 2, 'only the approved rm import and call may exist in production source');
+	assert.equal(
+		permanentDeleteSource.match(/\brm\(/gu)?.length,
+		1,
+		'rm() must stay inside the permanent-delete containment primitive',
 	);
 });

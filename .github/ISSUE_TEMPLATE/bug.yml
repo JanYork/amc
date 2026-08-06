@@ -1,0 +1,61 @@
+name: Bug report
+description: Report a reproducible problem in AMC
+title: "[Bug]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Do not paste secrets, tokens, credentials, private configuration, or sensitive paths. Report security issues through the private advisory form instead.
+  - type: input
+    id: version
+    attributes:
+      label: AMC version
+      description: Output of `amc --version`.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - macOS
+        - Linux
+    validations:
+      required: true
+  - type: input
+    id: node
+    attributes:
+      label: Node.js version
+      description: Output of `node --version`.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: Describe what happened and what you expected.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Sanitized reproduction
+      description: Provide minimal steps using temporary or redacted paths and values.
+    validations:
+      required: true
+  - type: textarea
+    id: output
+    attributes:
+      label: Sanitized output
+      description: Include relevant diagnostics after removing all secrets and private data.
+      render: text
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, private configuration, and sensitive paths.
+          required: true
+        - label: This is not a confidential security report.
+          required: true

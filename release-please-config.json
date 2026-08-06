@@ -1,0 +1,61 @@
+{
+  "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
+  "packages": {
+    ".": {
+      "release-type": "node",
+      "package-name": "@i-xor/amc",
+      "include-v-in-tag": true,
+      "release-name-pattern": "AMC v${version}",
+      "changelog-sections": [
+        {
+          "type": "feat",
+          "section": "Features"
+        },
+        {
+          "type": "fix",
+          "section": "Bug Fixes"
+        },
+        {
+          "type": "security",
+          "section": "Security"
+        },
+        {
+          "type": "perf",
+          "section": "Performance"
+        },
+        {
+          "type": "refactor",
+          "section": "Code Refactoring"
+        },
+        {
+          "type": "docs",
+          "section": "Documentation"
+        },
+        {
+          "type": "build",
+          "section": "Build System"
+        },
+        {
+          "type": "ci",
+          "section": "Continuous Integration"
+        },
+        {
+          "type": "test",
+          "section": "Tests",
+          "hidden": true
+        },
+        {
+          "type": "chore",
+          "section": "Miscellaneous Chores",
+          "hidden": true
+        }
+      ],
+      "extra-files": [
+        {
+          "type": "generic",
+          "path": "src/cli/help.ts"
+        }
+      ]
+    }
+  }
+}

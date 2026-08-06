@@ -1,0 +1,10 @@
+{
+  "truncated": false,
+  "tree": [
+    {"path": "SKILL.md", "type": "blob", "mode": "100644", "size": 57},
+    {"path": "skills/beta/SKILL.md", "type": "blob", "mode": "100644", "size": 61},
+    {"path": "skills/beta/script.sh", "type": "blob", "mode": "100755", "size": 7},
+    {"path": "broken/SKILL.md", "type": "blob", "mode": "100644", "size": 10},
+    {"path": "unsafe/SKILL.md", "type": "blob", "mode": "100644", "size": 55}
+  ]
+}

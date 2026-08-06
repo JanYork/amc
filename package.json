@@ -1,5 +1,5 @@
 {
-  "name": "agent-management-cli",
+  "name": "@i-xor/amc",
   "version": "0.1.0",
   "description": "Manage shared Agent Skills from one local store.",
   "type": "module",
@@ -8,12 +8,19 @@
   },
   "files": [
     "dist/src",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md",
+    "LICENSE",
+    "NOTICE"
   ],
   "scripts": {
-    "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test dist/test/*.test.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit"
+    "lint": "oxlint src test",
+    "build": "tsc -p tsconfig.build.json",
+    "build:test": "tsc -p tsconfig.json",
+    "test": "npm run build:test && node --test dist/test/*.test.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "coverage": "npm run build:test && node --test --experimental-test-coverage --test-coverage-include=dist/src/**/*.js --test-coverage-lines=80 --test-coverage-branches=75 --test-coverage-functions=90 dist/test/*.test.js",
+    "prepack": "npm run lint && npm run typecheck && npm run build"
   },
   "engines": {
     "node": ">=22"
@@ -26,6 +33,29 @@
     "@types/node": "22.20.1",
     "@types/react": "19.2.18",
     "ink-testing-library": "4.0.0",
+    "oxlint": "1.77.0",
     "typescript": "7.0.2"
+  },
+  "license": "Apache-2.0",
+  "author": "JanYork",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/JanYork/amc.git"
+  },
+  "homepage": "https://github.com/JanYork/amc#readme",
+  "bugs": {
+    "url": "https://github.com/JanYork/amc/issues"
+  },
+  "keywords": [
+    "agent-skills",
+    "cli",
+    "claude-code",
+    "codex",
+    "pi",
+    "developer-tools"
+  ],
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   }
 }

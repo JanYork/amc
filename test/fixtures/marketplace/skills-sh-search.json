@@ -1,0 +1,8 @@
+{
+  "query": "testing",
+  "skills": [
+    {"id": "anthropics/skills/webapp-testing", "skillId": "webapp-testing", "name": "webapp-testing", "installs": 127234, "source": "anthropics/skills"},
+    {"id": "bad", "skillId": 3, "name": false, "installs": "many", "source": null},
+    {"id": "evil", "skillId": "evil", "name": "\u001b[31mevil", "installs": 1, "source": "example/skills"}
+  ]
+}

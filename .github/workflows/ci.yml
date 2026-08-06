@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test (${{ matrix.os }}, Node ${{ matrix.node }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+        node:
+          - 22
+          - 26
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm test
+
+  package:
+    name: Package gate (Linux, Node 26)
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 26
+          cache: npm
+          registry-url: https://registry.npmjs.org
+      - run: npm ci
+      - run: npm run coverage
+      - name: Audit production dependencies
+        run: npm audit --audit-level=high --omit=dev --registry=https://registry.npmjs.org
+      - name: Audit all dependencies
+        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
+      - name: Pack and smoke-test the installed CLI
+        shell: bash
+        run: |
+          PACK_DIR="$RUNNER_TEMP/amc-pack"
+          PREFIX="$RUNNER_TEMP/amc-install"
+          HOME_DIR="$RUNNER_TEMP/amc-home"
+          mkdir -p "$PACK_DIR" "$PREFIX" "$HOME_DIR"
+          npm pack --pack-destination "$PACK_DIR"
+          TARBALL="$(find "$PACK_DIR" -name '*.tgz' -print -quit)"
+          test -n "$TARBALL"
+          npm install --global --prefix "$PREFIX" "$TARBALL"
+          AMC="$PREFIX/bin/amc"
+          HOME="$HOME_DIR" "$AMC" --version
+          HOME="$HOME_DIR" "$AMC" --help
+          HOME="$HOME_DIR" "$AMC" list
+          HOME="$HOME_DIR" "$AMC" migrate --all
+          test ! -e "$HOME_DIR/.amc"
+      - name: Validate npm publishing without publishing
+        run: npm publish --dry-run --access public

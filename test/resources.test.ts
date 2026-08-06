@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir, readFile, readdir, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, readdir, stat, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {
@@ -7,6 +7,7 @@ import {
 	scanMcpServers,
 	scanHooks,
 	scanPlugins,
+	setHookEnabled,
 	setMcpServerEnabled,
 	setPluginEnabled,
 	type ResourceContext,
@@ -74,7 +75,7 @@ test('scanPlugins normalizes Claude, Codex, and Pi without hiding provider failu
 			name: 'npm:pi-tools',
 			version: undefined,
 			scope: 'user',
-			state: 'unknown',
+			state: 'installed',
 			capability: 'native-interactive',
 		},
 	]);
@@ -245,11 +246,11 @@ test('scanHooks reads provider-owned config and Pi extensions without executing 
 		'codex plugin list --json': '{"installed":[]}',
 	}));
 
-	assert.deepEqual(result.hooks.map(hook => [hook.provider, hook.scope, hook.event, hook.type]), [
-		['claude', 'user', 'PostToolUse', 'command'],
-		['codex', 'user', 'after_tool', 'command'],
-		['pi', 'user', 'Extension', 'extension'],
-		['pi', 'user', 'Extension', 'extension'],
+	assert.deepEqual(result.hooks.map(hook => [hook.provider, hook.scope, hook.event, hook.type, hook.state]), [
+		['claude', 'user', 'PostToolUse', 'command', 'enabled'],
+		['codex', 'user', 'after_tool', 'command', 'enabled'],
+		['pi', 'user', 'Extension', 'extension', 'enabled'],
+		['pi', 'user', 'Extension', 'extension', 'enabled'],
 	]);
 	assert.equal(result.hooks.every(hook => /^[a-f0-9]{16}$/u.test(hook.id)), true);
 	assert.equal(result.diagnostics.length, 1);
@@ -308,4 +309,146 @@ test('editHook opens the exact source file selected from a fresh inventory', asy
 
 	await editHook(contextFor(home), runtime, hook.id);
 	assert.deepEqual(calls.filter(call => call.program === 'editor'), [{program: 'editor', arguments_: [sourcePath]}]);
+});
+
+test('setHookEnabled parks and restores one JSON hook with backups', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const sourcePath = join(home, '.claude', 'settings.json');
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await writeFile(sourcePath, `${JSON.stringify({
+		hooks: {Stop: [{matcher: 'Write', hooks: [
+			{type: 'command', command: 'format'},
+			{type: 'command', command: 'lint'},
+		]}]},
+	}, undefined, 2)}\n`, 'utf8');
+	const runtime = runtimeWith({'codex plugin list --json': '{"installed":[]}'});
+	const before = await scanHooks(context, runtime);
+	const selected = before.hooks.find(hook => hook.event === 'Stop' && hook.type === 'command');
+	assert.ok(selected);
+
+	const disabled = await setHookEnabled(context, runtime, selected.id, false);
+	assert.equal(disabled.state, 'disabled');
+	assert.doesNotMatch(await readFile(sourcePath, 'utf8'), /"format"/u);
+	assert.match(await readFile(sourcePath, 'utf8'), /"lint"/u);
+	assert.equal((await readdir(join(home, '.amc', 'disabled-hooks'))).some(name => name === `${disabled.id}.json`), true);
+	assert.equal((await readdir(join(home, '.claude'))).some(name => name.startsWith('settings.json.amc-backup-')), true);
+
+	const enabled = await setHookEnabled(context, runtime, disabled.id, true);
+	assert.equal(enabled.state, 'enabled');
+	assert.match(await readFile(sourcePath, 'utf8'), /"format"/u);
+	assert.match(await readFile(sourcePath, 'utf8'), /"lint"/u);
+	assert.equal((await readdir(join(home, '.amc', 'disabled-hooks'))).some(name => name === `${disabled.id}.json`), false);
+});
+
+test('setHookEnabled uses Pi extension overrides without moving extension files', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const extensionPath = join(home, '.pi', 'agent', 'extensions', 'guard.ts');
+	const settingsPath = join(home, '.pi', 'agent', 'settings.json');
+	await mkdir(join(home, '.pi', 'agent', 'extensions'), {recursive: true});
+	await writeFile(extensionPath, 'export default function guard() {}\n', 'utf8');
+	await writeFile(settingsPath, '{\n  "extensions": []\n}\n', 'utf8');
+	const runtime = runtimeWith({'codex plugin list --json': '{"installed":[]}'});
+	const hook = (await scanHooks(context, runtime)).hooks.find(candidate => candidate.provider === 'pi');
+	assert.ok(hook);
+
+	const disabled = await setHookEnabled(context, runtime, hook.id, false);
+	assert.equal(disabled.state, 'disabled');
+	assert.match(await readFile(settingsPath, 'utf8'), /"-extensions\/guard\.ts"/u);
+	assert.equal(await readFile(extensionPath, 'utf8'), 'export default function guard() {}\n');
+
+	const enabled = await setHookEnabled(context, runtime, hook.id, true);
+	assert.equal(enabled.state, 'enabled');
+	assert.match(await readFile(settingsPath, 'utf8'), /"\+extensions\/guard\.ts"/u);
+	assert.equal((await readdir(join(home, '.pi', 'agent'))).some(name => name.startsWith('settings.json.amc-backup-')), true);
+});
+
+test('setHookEnabled never mutates Hooks discovered in a Codex plugin cache', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const pluginRoot = join(home, '.codex', 'plugins', 'cache', 'acme', 'guard', '1.2.3');
+	const sourcePath = join(pluginRoot, 'hooks', 'hooks.json');
+	await mkdir(join(pluginRoot, '.codex-plugin'), {recursive: true});
+	await mkdir(join(pluginRoot, 'hooks'), {recursive: true});
+	await writeFile(join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({hooks: './hooks/hooks.json'}), 'utf8');
+	const original = JSON.stringify({hooks: {SessionStart: [{hooks: [{type: 'command', command: 'guard'}]}]}});
+	await writeFile(sourcePath, original, 'utf8');
+	const runtime = runtimeWith({'codex plugin list --json': JSON.stringify({installed: [{
+		name: 'guard', marketplaceName: 'acme', version: '1.2.3', enabled: true,
+	}]})});
+	const hook = (await scanHooks(context, runtime)).hooks[0];
+	assert.ok(hook);
+
+	const error = await setHookEnabled(context, runtime, hook.id, false).then(
+		() => '',
+		(reason: unknown) => reason instanceof Error ? reason.message : String(reason),
+	);
+
+	assert.equal(await readFile(sourcePath, 'utf8'), original);
+	assert.match(error, /HOOK_CHANGE_FAILED: .*provider-managed plugin cache/u);
+});
+
+test('setHookEnabled assigns unique identities to identical Hooks and toggles the selected occurrence', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const sourcePath = join(home, '.claude', 'settings.json');
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await writeFile(sourcePath, JSON.stringify({hooks: {Stop: [{hooks: [
+		{type: 'command', command: 'same'},
+		{type: 'command', command: 'same'},
+	]}]}}), 'utf8');
+	const runtime = runtimeWith({'codex plugin list --json': '{"installed":[]}'});
+	const before = (await scanHooks(context, runtime)).hooks.filter(hook => hook.event === 'Stop');
+
+	assert.equal(before.length, 2);
+	assert.equal(new Set(before.map(hook => hook.id)).size, 2);
+	const selected = before[1];
+	assert.ok(selected);
+	const disabled = await setHookEnabled(context, runtime, selected.id, false);
+	assert.equal(disabled.state, 'disabled');
+	const after = (await scanHooks(context, runtime)).hooks.filter(hook => hook.event === 'Stop');
+	assert.deepEqual(after.map(hook => hook.state).sort(), ['disabled', 'enabled']);
+	assert.equal(new Set(after.map(hook => hook.id)).size, 2);
+
+	const enabled = await setHookEnabled(context, runtime, disabled.id, true);
+	assert.equal(enabled.state, 'enabled');
+	assert.equal((await scanHooks(context, runtime)).hooks.filter(hook => hook.event === 'Stop' && hook.state === 'enabled').length, 2);
+});
+
+test('setHookEnabled creates disabled Hook records with owner-only permissions', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const sourcePath = join(home, '.claude', 'settings.json');
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await writeFile(sourcePath, JSON.stringify({hooks: {Stop: [{hooks: [{type: 'command', command: 'secret'}]}]}}), {encoding: 'utf8', mode: 0o600});
+	const runtime = runtimeWith({'codex plugin list --json': '{"installed":[]}'});
+	const hook = (await scanHooks(context, runtime)).hooks[0];
+	assert.ok(hook);
+
+	const disabled = await setHookEnabled(context, runtime, hook.id, false);
+	const recordPath = join(home, '.amc', 'disabled-hooks', `${disabled.id}.json`);
+	assert.equal((await stat(recordPath)).mode & 0o777, 0o600);
+});
+
+test('setHookEnabled rejects unknown Pi extension entries without changing settings', async () => {
+	const home = await createTestHome();
+	const context = contextFor(home);
+	const extensionPath = join(home, '.pi', 'agent', 'extensions', 'guard.ts');
+	const settingsPath = join(home, '.pi', 'agent', 'settings.json');
+	await mkdir(join(home, '.pi', 'agent', 'extensions'), {recursive: true});
+	await writeFile(extensionPath, 'export default function guard() {}\n', 'utf8');
+	const original = '{\n  "extensions": ["+known.ts", {"future": true}]\n}\n';
+	await writeFile(settingsPath, original, 'utf8');
+	const runtime = runtimeWith({'codex plugin list --json': '{"installed":[]}'});
+	const hook = (await scanHooks(context, runtime)).hooks.find(candidate => candidate.provider === 'pi');
+	assert.ok(hook);
+
+	const error = await setHookEnabled(context, runtime, hook.id, false).then(
+		() => '',
+		(reason: unknown) => reason instanceof Error ? reason.message : String(reason),
+	);
+
+	assert.equal(await readFile(settingsPath, 'utf8'), original);
+	assert.match(error, /HOOK_CHANGE_FAILED: .*extensions array of strings/u);
 });

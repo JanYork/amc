@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import {mkdir, symlink, writeFile} from 'node:fs/promises';
+import {mkdir, readFile, symlink, writeFile} from 'node:fs/promises';
 import {join} from 'node:path';
 import test from 'node:test';
 import {render} from 'ink-testing-library';
@@ -7,7 +7,7 @@ import {App, ManagedApp} from '../src/tui/App.js';
 import {createLayout, setSkillEnabled} from '../src/core/index.js';
 import type {ResourceRuntime} from '../src/core/resources.js';
 import type {TerminalPresentation} from '../src/presentation/theme.js';
-import {createTestHome, resolvedLink, writeSkill} from './helpers.js';
+import {createTestHome, pathExists, resolvedLink, writeSkill} from './helpers.js';
 
 const darkPresentation: TerminalPresentation = {theme: 'dark', colorDepth: 24};
 
@@ -19,7 +19,11 @@ const resourceRuntime: ResourceRuntime = {
 		if (program === 'codex') {
 			return Promise.resolve({exitCode: 0, stdout: arguments_[0] === 'mcp' ? '[{"name":"node_repl","enabled":true,"transport":{"type":"stdio"}}]' : '{"installed":[]}', stderr: ''});
 		}
-		return Promise.resolve({exitCode: 0, stdout: '', stderr: ''});
+		return Promise.resolve({
+			exitCode: 0,
+			stdout: 'User packages:\n  npm:pi-tools@1.2.3\n    /tmp/pi-tools\n',
+			stderr: '',
+		});
 	},
 	openEditor: () => Promise.resolve(),
 };
@@ -47,6 +51,20 @@ test('Ink TUI renders loading and empty states', async () => {
 	instance.unmount();
 });
 
+test('interactive TUI startup reconciles safe shared Skills before stable inventory', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	const shared = await writeSkill(layout.sources.agents, 'alpha', 'shared alpha');
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
+
+	assert.match(instance.frames[0] ?? '', /Loading Skills/);
+	assert.match(await waitForFrame(instance.lastFrame, /Reconciled 1 Skill/), /alpha/);
+	assert.equal(await pathExists(shared), false);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'alpha')), join(layout.amc.skills, 'alpha'));
+	instance.unmount();
+});
+
 test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded resource actions', async () => {
 	const home = await createTestHome();
 	const layout = createLayout(home);
@@ -69,13 +87,24 @@ test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded re
 
 	assert.match(await waitForFrame(instance.lastFrame, /No Skills found/), /Skills.*Hooks.*Plugins.*MCP/);
 	instance.stdin.write('\t');
-	assert.match(await waitForFrame(instance.lastFrame, /Stop.*command/), /Hooks/);
+	assert.match(await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/), /Marketplace/);
 	instance.stdin.write('\t');
-	assert.match(await waitForFrame(instance.lastFrame, /review@official/), /native-headless/);
+	assert.match(await waitForFrame(instance.lastFrame, /Stop.*command/), /Hooks/);
+	assert.match(instance.lastFrame() ?? '', /enabled/);
+	instance.stdin.write(' ');
+	assert.match(await waitForFrame(instance.lastFrame, /disabled/), /Space toggle/);
+	instance.stdin.write(' ');
+	await waitForFrame(instance.lastFrame, /enabled/);
+	instance.stdin.write('\t');
+	const pluginsFrame = await waitForFrame(instance.lastFrame, /review@official/);
+	assert.match(pluginsFrame, /native-headless/);
+	assert.match(pluginsFrame, /npm:pi-tools@1\.2\.3.*installed.*native-interactive/);
 	instance.stdin.write('\t');
 	assert.match(await waitForFrame(instance.lastFrame, /node_repl/), /stdio.*enabled/);
 	instance.stdin.write('\t');
 	await waitForFrame(instance.lastFrame, /No Skills found/);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/);
 	instance.stdin.write('\t');
 	await waitForFrame(instance.lastFrame, /Stop.*command/);
 	instance.stdin.write('e');
@@ -198,6 +227,73 @@ test('Ink TUI navigates, confirms migration, and toggles one target through core
 	assert.match(await waitForFrame(instance.lastFrame, /Enabled beta/), /codex=changed/);
 	assert.equal(await resolvedLink(join(layout.targets.codex, 'beta')), canonical);
 	instance.stdin.write('q');
+});
+
+test('Ink TUI resolves shared-source conflicts through exact five-root selection', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.sources.agents, 'alpha', 'shared');
+	await writeSkill(layout.sources.claude, 'alpha', 'claude');
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
+	await waitForFrame(instance.lastFrame, /Reconciled 0 Skills; 0 recovered; 1 conflicts/);
+
+	instance.stdin.write('m');
+	assert.match(await waitForFrame(instance.lastFrame, /Choose reconcile source/), /1 agents.*2 claude/);
+	assert.doesNotMatch(instance.lastFrame() ?? '', /3 |4 |5 /);
+	instance.stdin.write('2');
+	assert.match(await waitForFrame(instance.lastFrame, /Reconcile alpha.*Source: claude/), /y confirm/);
+	instance.stdin.write('y');
+	assert.match(await waitForFrame(instance.lastFrame, /Reconciled alpha/), /●/);
+	assert.equal(await pathExists(join(layout.sources.agents, 'alpha')), false);
+	assert.equal(await resolvedLink(join(layout.targets.claude, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'alpha')), join(layout.amc.skills, 'alpha'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'alpha')), join(layout.amc.skills, 'alpha'));
+	instance.unmount();
+});
+
+test('Ink TUI offers canonical when it is a real conflict choice and ignores absent sources', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'connect', 'canonical version');
+	await writeSkill(layout.sources.agents, 'connect', 'shared version');
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
+	await waitForFrame(instance.lastFrame, /1 conflicts/);
+
+	instance.stdin.write('m');
+	const choice = await waitForFrame(instance.lastFrame, /Choose reconcile source/);
+	assert.match(choice, /1 agents.*2 canonical/);
+	assert.doesNotMatch(choice, /3 |4 |5 /);
+	instance.stdin.write('2');
+	assert.match(await waitForFrame(instance.lastFrame, /Reconcile connect.*Source: canonical/), /y confirm/);
+	instance.stdin.write('y');
+	assert.match(await waitForFrame(instance.lastFrame, /Reconciled connect/), /●/);
+	assert.equal(await readFile(join(layout.amc.skills, 'connect', 'SKILL.md'), 'utf8'), 'canonical version');
+	assert.equal(await pathExists(join(layout.sources.agents, 'connect')), false);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'connect')), join(layout.amc.skills, 'connect'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'connect')), join(layout.amc.skills, 'connect'));
+	instance.unmount();
+});
+
+test('Ink TUI repairs an invalid shared wrapper by retaining canonical content', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await writeSkill(layout.amc.skills, 'planning-with-files', 'canonical version');
+	const wrapper = join(layout.sources.agents, 'planning-with-files');
+	await mkdir(join(wrapper, 'planning-with-files'), {recursive: true});
+	await writeFile(join(wrapper, 'planning-with-files', 'SKILL.md'), '---\nname: planning-with-files\ndescription: nested\n---\n');
+	await writeFile(join(wrapper, 'README.md'), 'repository wrapper');
+	const instance = render(<App layout={layout} presentation={darkPresentation}/>);
+	await waitForFrame(instance.lastFrame, /1 blocked/);
+
+	instance.stdin.write('m');
+	assert.match(await waitForFrame(instance.lastFrame, /Repair planning-with-files/), /Keep canonical.*archive invalid sources.*y confirm/u);
+	instance.stdin.write('y');
+	assert.match(await waitForFrame(instance.lastFrame, /Reconciled planning-with-files/), /●/u);
+	assert.equal(await readFile(join(layout.amc.skills, 'planning-with-files', 'SKILL.md'), 'utf8'), 'canonical version');
+	assert.equal(await pathExists(wrapper), false);
+	assert.equal(await resolvedLink(join(layout.targets.pi, 'planning-with-files')), join(layout.amc.skills, 'planning-with-files'));
+	assert.equal(await resolvedLink(join(layout.targets.codex, 'planning-with-files')), join(layout.amc.skills, 'planning-with-files'));
+	instance.unmount();
 });
 
 test('Ink TUI exposes divergence choice and blocks direct toggles of unmanaged entries', async () => {

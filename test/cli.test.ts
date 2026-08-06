@@ -96,6 +96,43 @@ test('parseCommand accepts bulk migration inspection and apply modes', () => {
 	});
 });
 
+test('parseCommand accepts read-only and explicitly authorized reconciliation', () => {
+	assert.deepEqual(parseCommand(['reconcile']), {kind: 'reconcile', apply: false, name: undefined, source: undefined});
+	assert.deepEqual(parseCommand(['reconcile', '--apply', '--yes']), {kind: 'reconcile', apply: true, name: undefined, source: undefined});
+	assert.deepEqual(parseCommand(['reconcile', 'alpha', '--source', 'agents', '--apply', '--yes']), {
+		kind: 'reconcile', apply: true, name: 'alpha', source: 'agents',
+	});
+	assert.deepEqual(parseCommand(['reconcile', 'alpha', '--source', 'canonical', '--apply', '--yes']), {
+		kind: 'reconcile', apply: true, name: 'alpha', source: 'canonical',
+	});
+	assert.deepEqual(parseCommand(['disable', 'prototype']), {kind: 'disable', name: 'prototype', target: undefined});
+});
+
+test('parseCommand accepts one-Skill and all-applied update checks', () => {
+	assert.deepEqual(parseCommand(['updates', 'check']), {kind: 'updates-check', name: undefined});
+	assert.deepEqual(parseCommand(['updates', 'check', 'alpha']), {kind: 'updates-check', name: 'alpha'});
+});
+
+test('parseCommand accepts GitHub OAuth, token-stdin, and status commands', () => {
+	assert.deepEqual(parseCommand(['auth', 'github', 'login']), {kind: 'github-auth-login'});
+	assert.deepEqual(parseCommand(['auth', 'github', 'set', '--token-stdin']), {kind: 'github-auth-token'});
+	assert.deepEqual(parseCommand(['auth', 'github', 'status']), {kind: 'github-auth-status'});
+});
+
+test('parseCommand accepts marketplace, repository, install, upgrade, and permanent delete commands', () => {
+	assert.deepEqual(parseCommand(['search', 'testing']), {kind: 'marketplace-search', query: 'testing', source: undefined});
+	assert.deepEqual(parseCommand(['search', 'testing', '--source', 'github']), {kind: 'marketplace-search', query: 'testing', source: 'github'});
+	assert.deepEqual(parseCommand(['repos', 'list']), {kind: 'repos-list'});
+	assert.deepEqual(parseCommand(['repos', 'add', 'example/skills', '--branch', 'main']), {kind: 'repos-add', source: 'example/skills', branch: 'main'});
+	assert.deepEqual(parseCommand(['repos', 'refresh', 'example/skills']), {kind: 'repos-refresh', source: 'example/skills'});
+	assert.deepEqual(parseCommand(['repos', 'remove', 'example/skills']), {kind: 'repos-remove', source: 'example/skills'});
+	assert.deepEqual(parseCommand(['repos', 'disable', 'example/skills']), {kind: 'repos-disable', source: 'example/skills'});
+	assert.deepEqual(parseCommand(['repos', 'enable', 'example/skills']), {kind: 'repos-enable', source: 'example/skills'});
+	assert.deepEqual(parseCommand(['install', 'example/skills', '--skill', 'alpha']), {kind: 'install', source: 'example/skills', skill: 'alpha', branch: undefined});
+	assert.deepEqual(parseCommand(['upgrade', 'alpha']), {kind: 'upgrade', name: 'alpha'});
+	assert.deepEqual(parseCommand(['delete', 'alpha', '--yes', '--confirm', 'alpha']), {kind: 'delete', name: 'alpha', confirmation: 'alpha'});
+});
+
 test('parseCommand accepts plugin and hook management commands', () => {
 	assert.deepEqual(parseCommand(['plugins', 'list', '--page=2', '--limit=10', '--search', 'review']), {
 		kind: 'plugins-list', page: 2, limit: 10, all: false, search: 'review',
@@ -111,6 +148,12 @@ test('parseCommand accepts plugin and hook management commands', () => {
 	});
 	assert.deepEqual(parseCommand(['hooks', 'edit', '0123456789abcdef']), {
 		kind: 'hook-edit', id: '0123456789abcdef',
+	});
+	assert.deepEqual(parseCommand(['hooks', 'enable', '0123456789abcdef']), {
+		kind: 'hook-enable', id: '0123456789abcdef',
+	});
+	assert.deepEqual(parseCommand(['hooks', 'disable', '0123456789abcdef']), {
+		kind: 'hook-disable', id: '0123456789abcdef',
 	});
 	assert.deepEqual(parseCommand(['mcp', 'list', '--search', 'graph']), {
 		kind: 'mcp-list', page: 1, limit: 20, all: false, search: 'graph',
@@ -136,6 +179,9 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['list', '--search', ''],
 		['enable'],
 		['enable', '../escape'],
+		['enable', 'bad\nname'],
+		['enable', '__proto__'],
+		['enable', 'constructor'],
 		['enable', 'code-review', '--page', '2'],
 		['enable', 'code-review', '--yes'],
 		['enable', 'code-review', '--target', 'other'],
@@ -146,6 +192,11 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['migrate', 'code-review', '--source', 'other'],
 		['migrate', '--all', '--source', 'claude'],
 		['migrate', 'code-review', '--target', 'codex'],
+		['reconcile', '--apply'],
+		['reconcile', '--yes'],
+		['reconcile', 'alpha', '--apply', '--yes'],
+		['reconcile', 'alpha', '--source', 'other', '--apply', '--yes'],
+		['reconcile', '--source', 'agents', '--apply', '--yes'],
 		['list', '--yes'],
 		['--help', 'list'],
 		['--target', 'codex'],
@@ -161,6 +212,27 @@ test('parseCommand rejects every invalid usage before execution', async context 
 		['mcp', 'enable'],
 		['mcp', 'enable', '../bad'],
 		['mcp', 'list', '--target', 'codex'],
+		['updates'],
+		['updates', 'check', 'alpha', 'extra'],
+		['updates', 'check', '--all'],
+		['auth'],
+		['auth', 'github'],
+		['auth', 'gitlab', 'status'],
+		['auth', 'github', 'login', '--token-stdin'],
+		['auth', 'github', 'set'],
+		['auth', 'github', 'status', '--token-stdin'],
+		['search'],
+		['search', 'testing', '--source', 'other'],
+		['repos'],
+		['repos', 'add', 'example/skills', '--skill', 'alpha'],
+		['install', 'example/skills'],
+		['install', 'example/skills', '--skill', '../bad'],
+		['upgrade'],
+		['upgrade', 'alpha', '--yes'],
+		['delete', 'alpha'],
+		['delete', 'alpha', '--yes'],
+		['delete', 'alpha', '--confirm', 'alpha'],
+		['delete', 'alpha', '--yes', '--confirm', 'beta'],
 	];
 
 	for (const arguments_ of invalidCases) {

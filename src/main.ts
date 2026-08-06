@@ -2,7 +2,8 @@
 import {homedir} from 'node:os';
 import {executeCommand, helpText, parseCommand, UsageError} from './cli/index.js';
 import {AmcError, createLayout, type Layout} from './core/index.js';
-import {createResourceRuntime} from './runtime.js';
+import {resolveGitHubAuthentication} from './core/marketplace.js';
+import {createGitHubAuthRuntime, createMarketplaceRuntime, createResourceRuntime} from './runtime.js';
 import {
 	resolveTerminalPresentation,
 	type ColorDepth,
@@ -37,6 +38,15 @@ async function loadTui(
 	await loaded.runTui(layout, presentation, resources);
 }
 
+async function readBoundedStdin(): Promise<string> {
+	let value = '';
+	for await (const chunk of process.stdin) {
+		value += String(chunk);
+		if (value.length > 4096) throw new Error('Token input exceeds 4096 characters.');
+	}
+	return value;
+}
+
 async function main(): Promise<void> {
 	try {
 		const command = parseCommand(process.argv.slice(2));
@@ -54,9 +64,20 @@ async function main(): Promise<void> {
 			colorDepth,
 		});
 		const layout = createLayout(homedir());
+		const githubAuthRuntime = createGitHubAuthRuntime();
+		const marketplace = createMarketplaceRuntime(async () =>
+			(await resolveGitHubAuthentication(layout, process.env, githubAuthRuntime))?.token,
+		);
 		const resources = {
 			context: {home: layout.home, cwd: process.cwd()},
 			runtime: createResourceRuntime(process.env),
+			marketplace,
+			githubAuth: {
+				runtime: githubAuthRuntime,
+				environment: process.env,
+				readStdin: readBoundedStdin,
+				stdinIsTTY: process.stdin.isTTY === true,
+			},
 		};
 		if (command.kind === 'tui') {
 			if (process.stdin.isTTY !== true || process.stdout.isTTY !== true) {

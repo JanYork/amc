@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Confidential security report
+    url: https://github.com/JanYork/amc/security/advisories/new
+    about: Report vulnerabilities privately. Never include live credentials unless explicitly requested in the advisory.

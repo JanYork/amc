@@ -1,0 +1,48 @@
+name: Feature request
+description: Propose a focused improvement to AMC
+title: "[Feature]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Explain the user problem before proposing implementation. Do not paste secrets, tokens, credentials, private configuration, or sensitive paths.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What safe, supported workflow is difficult today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe observable behavior, including read-only preview, backup, verification, and recovery expectations where relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Describe current workarounds or smaller alternatives.
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Provider scope
+      options:
+        - Provider-independent
+        - Claude Code
+        - Pi
+        - Codex
+        - Multiple providers
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed credentials, tokens, private configuration, and sensitive paths.
+          required: true
+        - label: I checked existing issues and pull requests.
+          required: true
