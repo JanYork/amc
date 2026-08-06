@@ -172,7 +172,7 @@ test('CI and release automation stays bounded to the approved matrix and publish
 	}
 });
 
-test('Release Please owns versioning and starts before the unpublished initial release', async () => {
+test('Release Please owns versioning across initial and generated release states', async () => {
 	const [config, manifest, changelog, helpSource, packageJson] = await Promise.all([
 		readJsonObject('release-please-config.json'),
 		readJsonObject('.release-please-manifest.json'),
@@ -198,11 +198,19 @@ test('Release Please owns versioning and starts before the unpublished initial r
 		{type: 'chore', section: 'Miscellaneous Chores', hidden: true},
 	]);
 	assert.deepEqual(rootPackage['extra-files'], [{type: 'generic', path: 'src/cli/help.ts'}]);
-	assert.deepEqual(manifest, {'.': '0.0.0'});
-	assert.equal(packageJson['version'], '0.1.0');
-	assert.match(helpSource, /^export const version = '0\.1\.0'; \/\/ x-release-please-version$/mu);
-	assert.doesNotMatch(changelog, /## \[0\.1\.0\]/u);
-	assert.match(changelog, /## Unreleased\n\n(?:No release has been published yet\.|- Add )/u);
+	const packageVersion = packageJson['version'];
+	const manifestVersion = manifest['.'];
+	assert.ok(typeof packageVersion === 'string');
+	assert.ok(typeof manifestVersion === 'string');
+	assert.ok(manifestVersion === '0.0.0' || manifestVersion === packageVersion);
+	assert.ok(helpSource.includes(`export const version = '${packageVersion}'; // x-release-please-version`));
+	if (manifestVersion === '0.0.0') {
+		assert.equal(packageVersion, '0.1.0');
+		assert.doesNotMatch(changelog, /## 0\.1\.0/u);
+		assert.match(changelog, /## Unreleased\n\n(?:No release has been published yet\.|- Add )/u);
+	} else {
+		assert.ok(changelog.includes(`## ${packageVersion} (`));
+	}
 });
 
 test('intended public files contain no personal absolute paths or contact addresses', async () => {
