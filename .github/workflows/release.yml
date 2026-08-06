@@ -11,76 +11,8 @@ jobs:
     permissions:
       contents: write
       pull-requests: write
-    outputs:
-      release_created: ${{ steps.release.outputs.release_created }}
-      tag_name: ${{ steps.release.outputs.tag_name }}
     steps:
       - name: Create or update release pull request
-        id: release
         uses: googleapis/release-please-action@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
-
-  publish:
-    needs: release
-    if: ${{ needs.release.outputs.release_created == 'true' }}
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - name: Check out released tag
-        uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.release.outputs.tag_name }}
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: 22
-          cache: npm
-          registry-url: https://registry.npmjs.org
-      - run: npm ci
-      - run: npm run lint
-      - run: npm run typecheck
-      - run: npm test
-      - run: npm run coverage
-      - name: Audit production dependencies
-        run: npm audit --audit-level=high --omit=dev --registry=https://registry.npmjs.org
-      - name: Audit all dependencies
-        run: npm audit --audit-level=high --registry=https://registry.npmjs.org
-      - name: Pack and smoke-test the installed CLI
-        shell: bash
-        run: |
-          PACK_DIR="$RUNNER_TEMP/amc-pack"
-          PREFIX="$RUNNER_TEMP/amc-install"
-          HOME_DIR="$RUNNER_TEMP/amc-home"
-          mkdir -p "$PACK_DIR" "$PREFIX" "$HOME_DIR"
-          npm pack --pack-destination "$PACK_DIR"
-          TARBALL="$(find "$PACK_DIR" -name '*.tgz' -print -quit)"
-          test -n "$TARBALL"
-          npm install --global --prefix "$PREFIX" "$TARBALL"
-          AMC="$PREFIX/bin/amc"
-          HOME="$HOME_DIR" "$AMC" --version
-          HOME="$HOME_DIR" "$AMC" --help
-          HOME="$HOME_DIR" "$AMC" list
-          HOME="$HOME_DIR" "$AMC" migrate --all
-          test ! -e "$HOME_DIR/.amc"
-      - name: Publish package with provenance
-        run: npm publish --access public --provenance
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-      - name: Verify published version
-        shell: bash
-        run: |
-          EXPECTED="$(node -p "require('./package.json').version")"
-          for attempt in {1..12}; do
-            PUBLISHED="$(npm view @i-xor/amc version --registry=https://registry.npmjs.org 2>/dev/null || true)"
-            if [ "$PUBLISHED" = "$EXPECTED" ]; then
-              echo "Verified @i-xor/amc@$EXPECTED on npm."
-              exit 0
-            fi
-            echo "Attempt $attempt: waiting for @i-xor/amc@$EXPECTED."
-            sleep 10
-          done
-          echo "Published version did not become visible within 120 seconds."
-          exit 1

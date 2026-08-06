@@ -39,4 +39,28 @@ Describe the motivation, behavior, validation, risks, and recovery implications
 in the pull request. Documentation should be concise and update both READMEs
 when user-facing instructions change substantially.
 
+## Maintainer releases
+
+Release Please prepares the version, changelog, tag, and GitHub Release through a
+reviewed release pull request. GitHub Actions never receives an npm publishing
+token and does not publish the package.
+
+After the release pull request is merged and its tag exists, an authorized
+maintainer publishes that exact version from a verified local checkout with npm
+2FA enabled:
+
+```bash
+npm ci
+npm run lint
+npm run typecheck
+npm test
+npm run coverage
+npm run build
+npm publish --access public
+npm view @i-xor/amc version --registry=https://registry.npmjs.org
+```
+
+`npm publish` is irreversible. Confirm the checked-out version and clean working
+tree before running it.
+
 Contributions are submitted under the [Apache License 2.0](LICENSE).

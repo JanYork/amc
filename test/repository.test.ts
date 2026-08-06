@@ -150,20 +150,9 @@ test('CI and release automation stays bounded to the approved matrix and publish
 	assert.match(release, /on:\n  push:\n    branches:\n      - main/u);
 	assert.match(release, /release:\n    runs-on: ubuntu-latest\n    permissions:\n      contents: write\n      pull-requests: write/u);
 	assert.match(release, /googleapis\/release-please-action@v4/u);
-	assert.match(release, /release_created: \$\{\{ steps\.release\.outputs\.release_created \}\}/u);
-	assert.match(release, /tag_name: \$\{\{ steps\.release\.outputs\.tag_name \}\}/u);
-	assert.match(release, /if: \$\{\{ needs\.release\.outputs\.release_created == 'true' \}\}/u);
-	assert.match(release, /ref: \$\{\{ needs\.release\.outputs\.tag_name \}\}/u);
-	assert.match(release, /permissions:\n      contents: read\n      id-token: write/u);
-	assert.match(release, /node-version: 22[\s\S]*cache: npm[\s\S]*registry-url: https:\/\/registry\.npmjs\.org/u);
-	assert.match(release, /npm ci[\s\S]*npm run lint[\s\S]*npm run typecheck[\s\S]*npm test[\s\S]*npm run coverage/u);
-	assert.match(release, /npm audit --audit-level=high --omit=dev[\s\S]*npm audit --audit-level=high/u);
-	assert.match(release, /test ! -e "\$HOME_DIR\/\.amc"/u);
-	assert.match(release, /npm publish --access public --provenance/u);
-	assert.match(release, /NODE_AUTH_TOKEN: \$\{\{ secrets\.NPM_TOKEN \}\}/u);
-	assert.match(release, /for attempt in \{1\.\.12\}/u);
-	assert.match(release, /actions\/checkout@v5/u);
-	assert.match(release, /actions\/setup-node@v6/u);
+	assert.doesNotMatch(release, /^  publish:/mu);
+	assert.doesNotMatch(release, /npm publish/u);
+	assert.doesNotMatch(release, /NPM_TOKEN/u);
 
 	for (const workflow of [ci, release]) {
 		assert.doesNotMatch(workflow, /windows-latest/iu);
