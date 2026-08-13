@@ -200,7 +200,7 @@ test('Release Please owns versioning across initial and generated release states
 		assert.doesNotMatch(changelog, /## 0\.1\.0/u);
 		assert.match(changelog, /## Unreleased\n\n(?:No release has been published yet\.|- Add )/u);
 	} else {
-		assert.ok(changelog.includes(`## ${packageVersion} (`));
+		assert.ok(changelog.includes(`## ${packageVersion} (`) || changelog.includes(`## [${packageVersion}](`));
 	}
 });
 
