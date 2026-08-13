@@ -4,6 +4,7 @@
     ".": {
       "release-type": "node",
       "package-name": "@i-xor/amc",
+      "include-component-in-tag": false,
       "include-v-in-tag": true,
       "release-name-pattern": "AMC v${version}",
       "changelog-sections": [

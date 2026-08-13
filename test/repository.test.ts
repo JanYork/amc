@@ -174,6 +174,7 @@ test('Release Please owns versioning across initial and generated release states
 	assert.equal(rootPackage['release-type'], 'node');
 	assert.equal(rootPackage['package-name'], '@i-xor/amc');
 	assert.equal(rootPackage['include-v-in-tag'], true);
+	assert.equal(rootPackage['include-component-in-tag'], false);
 	assert.equal(rootPackage['release-name-pattern'], 'AMC v${version}');
 	assert.deepEqual(rootPackage['changelog-sections'], [
 		{type: 'feat', section: 'Features'},
