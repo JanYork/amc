@@ -22,4 +22,13 @@ export {
 	setPluginEnabled,
 } from './resources/plugins.js';
 export {scanMcpServers, setMcpServerEnabled} from './resources/mcp.js';
-export {editHook, scanHooks, setHookEnabled} from './resources/hooks.js';
+export {
+	editHook,
+	readHookPreview,
+	restoreHookEdit,
+	scanHooks,
+	setHookEnabled,
+	type HookEditRecovery,
+	type HookEditResult,
+	type HookPreview,
+} from './resources/hooks.js';

@@ -65,8 +65,8 @@ test('public documentation is complete, reciprocal, and grounded in CLI help', a
 	assert.match(english, /amc hooks enable\|disable <hook-id>/u);
 	assert.match(chinese, /amc hooks enable\|disable <hook-id>/u);
 	assert.match(english, /disabled-hooks\/<hook-id>\.json/u);
-	assert.match(english, /platform[\s\S]*fallback[\s\S]*open -t[\s\S]*vi/u);
-	assert.match(chinese, /fallback[\s\S]*open -t[\s\S]*vi/u);
+	assert.match(english, /\$VISUAL[\s\S]*\$EDITOR[\s\S]*vim/u);
+	assert.match(chinese, /\$VISUAL[\s\S]*\$EDITOR[\s\S]*vim/u);
 
 	const helpCommands = helpSource
 		.split('\n')

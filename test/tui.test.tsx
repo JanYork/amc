@@ -72,16 +72,17 @@ test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded re
 	await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({
 		hooks: {Stop: [{hooks: [{type: 'command'}]}]},
 	}), 'utf8');
-	let editedId: string | undefined;
+	let editedPath: string | undefined;
+	const interactiveRuntime: ResourceRuntime = {...resourceRuntime, openEditor: path => {
+		editedPath = path;
+		return Promise.resolve();
+	}};
 	const instance = render(
 		<ManagedApp
 			layout={layout}
 			presentation={darkPresentation}
-			resources={{context: {home, cwd: home}, runtime: resourceRuntime}}
+			resources={{context: {home, cwd: home}, runtime: interactiveRuntime}}
 			windowSize={{columns: 90, rows: 16}}
-			onHookEdit={id => {
-				editedId = id;
-			}}
 		/>,
 	);
 
@@ -90,6 +91,7 @@ test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded re
 	assert.match(await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/), /Marketplace/);
 	instance.stdin.write('\t');
 	assert.match(await waitForFrame(instance.lastFrame, /Stop.*command/), /Hooks/);
+	assert.match(await waitForFrame(instance.lastFrame, /\b1\s+\{/u), /Preview.*settings\.json/su);
 	assert.match(instance.lastFrame() ?? '', /enabled/);
 	instance.stdin.write(' ');
 	assert.match(await waitForFrame(instance.lastFrame, /disabled/), /Space toggle/);
@@ -108,7 +110,114 @@ test('managed TUI switches among Skills, Hooks, Plugins, and MCP with bounded re
 	instance.stdin.write('\t');
 	await waitForFrame(instance.lastFrame, /Stop.*command/);
 	instance.stdin.write('e');
-	assert.match(editedId ?? '', /^[a-f0-9]{16}$/u);
+	assert.match(await waitForFrame(instance.lastFrame, /Saved Hook source/u), /Stop.*Preview/su);
+	assert.equal(editedPath, join(home, '.claude', 'settings.json'));
+});
+
+test('Hooks TUI opens a bounded full-file preview and scrolls with Vim keys', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await writeFile(join(home, '.claude', 'settings.json'), `${JSON.stringify({
+		hooks: {Stop: [{hooks: [{type: 'command', command: 'first'}]}]},
+		padding: Array.from({length: 20}, (_, index) => `line-${index + 1}`),
+	}, undefined, 2)}\n`, 'utf8');
+	const instance = render(
+		<ManagedApp
+			layout={layout}
+			presentation={darkPresentation}
+			resources={{context: {home, cwd: home}, runtime: resourceRuntime}}
+			windowSize={{columns: 90, rows: 16}}
+		/>,
+	);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/u);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /\b1\s+\{/u);
+
+	instance.stdin.write('p');
+	const first = await waitForFrame(instance.lastFrame, /Full preview/su);
+	assert.match(first, /\b1\s+\{/u);
+	instance.stdin.write('j');
+	const scrolled = await waitForFrame(instance.lastFrame, /Full preview.*2–/su);
+	assert.doesNotMatch(scrolled, /\b1\s+\{/u);
+	instance.stdin.write('\u001B');
+	assert.match(await waitForFrame(instance.lastFrame, /Search:.*Preview/su), /Stop.*command/su);
+	instance.unmount();
+});
+
+test('Hooks TUI keeps an invalid Vim edit visible and restores its guarded backup', async () => {
+	const home = await createTestHome();
+	const layout = createLayout(home);
+	await mkdir(join(home, '.claude'), {recursive: true});
+	const sourcePath = join(home, '.claude', 'settings.json');
+	const original = JSON.stringify({hooks: {Stop: [{hooks: [{type: 'command'}]}]}});
+	await writeFile(sourcePath, original, 'utf8');
+	const runtime: ResourceRuntime = {...resourceRuntime, openEditor: path => writeFile(path, '{invalid', 'utf8')};
+	const instance = render(
+		<ManagedApp
+			layout={layout}
+			presentation={darkPresentation}
+			resources={{context: {home, cwd: home}, runtime}}
+			windowSize={{columns: 90, rows: 16}}
+		/>,
+	);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/u);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /\b1\s+\{/u);
+
+	instance.stdin.write('e');
+	assert.match(await waitForFrame(instance.lastFrame, /invalid JSON.*u restore backup/su), /No hooks found/u);
+	assert.equal(await readFile(sourcePath, 'utf8'), '{invalid');
+	instance.stdin.write('u');
+	assert.match(await waitForFrame(instance.lastFrame, /Restored the pre-edit Hook source/u), /Stop.*Preview/su);
+	assert.equal(await readFile(sourcePath, 'utf8'), original);
+	instance.unmount();
+});
+
+test('Hooks TUI keeps the edited source selected when its content changes the Hook ID', async () => {
+	const home = await createTestHome();
+	const project = join(home, 'project');
+	await mkdir(join(home, '.claude'), {recursive: true});
+	await mkdir(join(project, '.claude'), {recursive: true});
+	await writeFile(join(home, '.claude', 'settings.json'), JSON.stringify({
+		hooks: {Stop: [{hooks: [{type: 'command', command: 'user'}]}]},
+	}), 'utf8');
+	const projectSource = join(project, '.claude', 'settings.json');
+	await writeFile(projectSource, JSON.stringify({
+		hooks: {SessionStart: [{hooks: [{type: 'command', command: 'before'}]}]},
+	}), 'utf8');
+	const runtime: ResourceRuntime = {...resourceRuntime, openEditor: path => writeFile(path, JSON.stringify({
+		hooks: {SessionStart: [{hooks: [{type: 'command', command: 'after'}]}]},
+	}), 'utf8')};
+	const instance = render(
+		<ManagedApp
+			layout={createLayout(home)}
+			presentation={darkPresentation}
+			resources={{context: {home, cwd: project}, runtime}}
+			windowSize={{columns: 90, rows: 16}}
+		/>,
+	);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Marketplace runtime is unavailable/u);
+	instance.stdin.write('\t');
+	await waitForFrame(instance.lastFrame, /Stop.*SessionStart/su);
+	instance.stdin.write('/');
+	await waitForFrame(instance.lastFrame, /Search: —█/u);
+	instance.stdin.write('SessionStart');
+	assert.match(await waitForFrame(instance.lastFrame, /› SessionStart/u), /Preview.*project.*settings\.json/su);
+	instance.stdin.write('\r');
+	await waitForFrame(instance.lastFrame, /Search: SessionStart\n/u);
+
+	instance.stdin.write('e');
+	const edited = await waitForFrame(instance.lastFrame, /Saved Hook source/u);
+	assert.match(edited, /› SessionStart/u);
+	assert.match(edited, /Preview.*project.*settings\.json/su);
+	instance.stdin.write('/');
+	instance.stdin.write('\u001B');
+	assert.match(await waitForFrame(instance.lastFrame, /Search: —/u), /› SessionStart.*project/su);
+	instance.unmount();
 });
 
 test('Ink TUI shows the selected Skill description and source path', async () => {

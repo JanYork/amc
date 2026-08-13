@@ -140,10 +140,11 @@ amc auth github status
   通过 `pi config` 交互管理。
 - **MCP：**显示 Claude Code 的 user/local/project 定义和 Codex 原生清单。
   enable/disable 会保留 server 定义。AMC 不为 Pi 提供原生 MCP registry。
-- **Hooks：**清单扫描绝不执行 Hook。enable/disable 会停放或恢复 JSON Hook，
-  或更新 Pi extension override。`hooks edit` 优先使用 `$VISUAL`，其次使用
-  `$EDITOR`，未配置时采用平台 fallback（macOS 为 `open -t`，Linux 为 `vi`）
-  打开所选的提供方源文件。
+- **Hooks：**清单扫描绝不执行 Hook。TUI 会带行号预览所选源文件，`p` 可进入
+  可滚动的完整文件预览。enable/disable 会停放或恢复 JSON Hook，或更新 Pi
+  extension override。编辑时临时把终端交给 `$VISUAL`，其次 `$EDITOR`，未配置
+  时回退到 `vim`，退出编辑器后返回原 TUI。无效 JSON 会保留并明确提示，`u`
+  可恢复编辑前的受保护备份。
 
 ## TUI 按键
 
@@ -161,10 +162,11 @@ amc auth github status
 | `Esc` | 取消、关闭帮助或清空搜索 |
 | `m` | 检查 Skill 迁移；用 `1`/`2`/`3` 选择来源，用 `y` 确认 |
 | `c` / `C` | 检查当前 Skill / 一键检查全部已应用 canonical Skills 的更新状态 |
-| `u` | 升级当前记录了来源的 Skill |
+| `u` | 升级当前记录了来源的 Skill；恢复失败的 Hook 编辑 |
 | `d` | 经警告和完整名称确认后永久删除当前 Skill |
 | Marketplace 中的 `/`、`a`、`i` | 搜索、添加已验证 GitHub 仓库、安装当前结果 |
 | `e` | 编辑所选 Hook 源文件 |
+| `p` | 打开或关闭 Hook 完整源文件预览 |
 | `r` | 刷新清单 |
 | `?` | 显示或关闭按键帮助 |
 | `q` | 退出 |

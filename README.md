@@ -148,10 +148,12 @@ Install resolves the selected repository, branch, relative path, and commit agai
 - **MCP:** Claude Code user, local, and project definitions and Codex's native
   inventory are shown. Enable and disable preserve server definitions. Pi has
   no native MCP registry in AMC.
-- **Hooks:** inventory never executes Hook code. Enable and disable park or
-  restore JSON Hooks, or update Pi extension overrides. `hooks edit` opens the
-  selected provider-owned file using `$VISUAL`, then `$EDITOR`, with the platform
-  fallback (`open -t` on macOS or `vi` on Linux).
+- **Hooks:** inventory never executes Hook code. The TUI previews the selected
+  source with line numbers; `p` opens a scrollable full-file preview. Enable and
+  disable park or restore JSON Hooks, or update Pi extension overrides. Editing
+  temporarily hands the terminal to `$VISUAL`, then `$EDITOR`, falling back to
+  `vim`, and returns to the same TUI. Invalid JSON remains visible and `u`
+  restores the guarded pre-edit backup.
 
 ## TUI controls
 
@@ -169,10 +171,11 @@ Install resolves the selected repository, branch, relative path, and commit agai
 | `Esc` | Cancel, close help, or clear search |
 | `m` | Review Skill migration; choose sources with `1`/`2`/`3` and confirm with `y` |
 | `c` / `C` | Check the selected Skill / all applied canonical Skills for updates |
-| `u` | Upgrade the selected provenance-tracked Skill |
+| `u` | Upgrade the selected provenance-tracked Skill; restore a failed Hook edit |
 | `d` | Permanently delete the selected Skill with warning and exact-name confirmation |
 | `/`, `a`, `i` in Marketplace | Search, add a validated GitHub repository, or install the selected result |
 | `e` | Edit the selected Hook source |
+| `p` | Open or close the full Hook source preview |
 | `r` | Refresh inventory |
 | `?` | Toggle keyboard help |
 | `q` | Quit |

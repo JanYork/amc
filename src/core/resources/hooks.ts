@@ -1,11 +1,36 @@
 import {createHash, randomUUID} from 'node:crypto';
-import {mkdir, readdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
+import {mkdir, open, readdir, readFile, rename, stat, writeFile} from 'node:fs/promises';
 import {basename, dirname, extname, join, relative, resolve, sep} from 'node:path';
 import type {HookResource, HookScanResult, HookState, ResourceContext, ResourceDiagnostic, ResourceRuntime, ResourceScope} from './model.js';
-import {booleanField, hasErrorCode, isObject, isUnknownArray, type JsonObject, parseJson, pluginDiagnostic, replaceWithBackupAndConfirmation, scopeField, stringArray, stringField} from './persistence.js';
+import {atomicReplace, booleanField, hasErrorCode, isObject, isUnknownArray, type JsonObject, parseJson, pluginDiagnostic, replaceWithBackupAndConfirmation, scopeField, stringArray, stringField} from './persistence.js';
+
+export type HookPreview = Readonly<{
+	sourcePath: string;
+	lines: ReadonlyArray<string>;
+	truncated: boolean;
+}>;
+
+export type HookEditRecovery = Readonly<{
+	sourcePath: string;
+	backupPath: string;
+	editedHash: string;
+	mode: number;
+}>;
+
+export type HookEditResult =
+	| Readonly<{state: 'valid'; sourcePath: string}>
+	| Readonly<{state: 'invalid'; sourcePath: string; diagnostic: ResourceDiagnostic; recovery: HookEditRecovery}>;
 
 function hookId(parts: ReadonlyArray<string>): string {
 	return createHash('sha256').update(parts.join('\0')).digest('hex').slice(0, 16);
+}
+
+function contentsHash(contents: Uint8Array): string {
+	return createHash('sha256').update(contents).digest('hex');
+}
+
+function terminalSafe(value: string): string {
+	return value.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F-\u009F]/gu, '�');
 }
 
 function hookType(value: unknown): string {
@@ -583,14 +608,70 @@ export async function setHookEnabled(
 	return confirmed;
 }
 
-export async function editHook(
+async function selectedHook(
 	context: ResourceContext,
 	runtime: ResourceRuntime,
 	id: string,
-): Promise<void> {
+): Promise<HookResource> {
 	const hook = (await scanHooks(context, runtime)).hooks.find(candidate => candidate.id === id);
 	if (hook === undefined) {
 		throw new Error(`HOOK_NOT_FOUND: ${id}`);
 	}
+	return hook;
+}
+
+export async function readHookPreview(
+	context: ResourceContext,
+	runtime: ResourceRuntime,
+	id: string,
+	maxBytes = 1_048_576,
+): Promise<HookPreview> {
+	const hook = await selectedHook(context, runtime, id);
+	const handle = await open(hook.sourcePath, 'r');
+	try {
+		const buffer = Buffer.alloc(maxBytes + 1);
+		const {bytesRead} = await handle.read(buffer, 0, buffer.length, 0);
+		const truncated = bytesRead > maxBytes;
+		const contents = new TextDecoder().decode(buffer.subarray(0, Math.min(bytesRead, maxBytes)));
+		return {sourcePath: hook.sourcePath, lines: terminalSafe(contents).split(/\r?\n/u), truncated};
+	} finally {
+		await handle.close();
+	}
+}
+
+export async function editHook(
+	context: ResourceContext,
+	runtime: ResourceRuntime,
+	id: string,
+): Promise<HookEditResult> {
+	const hook = await selectedHook(context, runtime, id);
+	if (hook.capability !== 'config-edit') {
+		throw new Error(`HOOK_EDIT_UNSUPPORTED: ${id}`);
+	}
+	const original = await readFile(hook.sourcePath);
+	const mode = (await stat(hook.sourcePath)).mode & 0o777;
+	const backupPath = `${hook.sourcePath}.amc-edit-backup-${new Date().toISOString().replaceAll(':', '-')}-${randomUUID()}`;
+	await writeFile(backupPath, original, {flag: 'wx', mode: 0o600});
 	await runtime.openEditor(hook.sourcePath);
+	const edited = await readFile(hook.sourcePath);
+	const result = await scanHooks(context, runtime);
+	const diagnostic = result.diagnostics.find(candidate => candidate.path === hook.sourcePath);
+	if (diagnostic === undefined) {
+		return {state: 'valid', sourcePath: hook.sourcePath};
+	}
+	return {
+		state: 'invalid',
+		sourcePath: hook.sourcePath,
+		diagnostic,
+		recovery: {sourcePath: hook.sourcePath, backupPath, editedHash: contentsHash(edited), mode},
+	};
+}
+
+export async function restoreHookEdit(recovery: HookEditRecovery): Promise<void> {
+	const current = await readFile(recovery.sourcePath);
+	if (contentsHash(current) !== recovery.editedHash) {
+		throw new Error('HOOK_EDIT_CHANGED: source changed after the failed edit.');
+	}
+	const original = await readFile(recovery.backupPath, 'utf8');
+	await atomicReplace(recovery.sourcePath, original, recovery.mode);
 }

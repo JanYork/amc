@@ -1,4 +1,4 @@
-import {execFile, spawn} from 'node:child_process';
+import {execFile, spawn, spawnSync} from 'node:child_process';
 import type {GitHubAuthRuntime, MarketplaceRuntime} from './core/marketplace.js';
 import type {ResourceRuntime} from './core/resources.js';
 
@@ -138,7 +138,7 @@ export function parseEditorCommand(value: string): ReadonlyArray<string> {
 	return tokens;
 }
 
-export function resolveEditorCommand(environment: NodeJS.ProcessEnv, platform: NodeJS.Platform): string {
+export function resolveEditorCommand(environment: NodeJS.ProcessEnv, _platform: NodeJS.Platform): string {
 	const visual = environment['VISUAL']?.trim();
 	if (visual !== undefined && visual.length > 0) {
 		return visual;
@@ -147,7 +147,7 @@ export function resolveEditorCommand(environment: NodeJS.ProcessEnv, platform: N
 	if (editor !== undefined && editor.length > 0) {
 		return editor;
 	}
-	return platform === 'darwin' ? 'open -t' : platform === 'win32' ? 'notepad' : 'vi';
+	return 'vim';
 }
 
 function openEditor(command: ReadonlyArray<string>, path: string): Promise<void> {
@@ -155,17 +155,11 @@ function openEditor(command: ReadonlyArray<string>, path: string): Promise<void>
 	if (program === undefined) {
 		return Promise.reject(new Error('EDITOR_NOT_CONFIGURED: set $VISUAL or $EDITOR.'));
 	}
-	return new Promise((resolve, reject) => {
-		const child = spawn(program, [...command.slice(1), path], {stdio: 'inherit'});
-		child.once('error', reject);
-		child.once('exit', code => {
-			if (code === 0) {
-				resolve();
-			} else {
-				reject(new Error(`Editor exited with code ${code ?? 'unknown'}.`));
-			}
-		});
-	});
+	const result = spawnSync(program, [...command.slice(1), path], {stdio: 'inherit'});
+	if (result.error !== undefined) return Promise.reject(result.error);
+	return result.status === 0
+		? Promise.resolve()
+		: Promise.reject(new Error(`Editor exited with code ${result.status ?? 'unknown'}.`));
 }
 
 export function createResourceRuntime(environment: NodeJS.ProcessEnv): ResourceRuntime {

@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {createMarketplaceRuntime, githubCliInstallGuide, parseEditorCommand, resolveEditorCommand} from '../src/runtime.js';
+import {createMarketplaceRuntime, createResourceRuntime, githubCliInstallGuide, parseEditorCommand, resolveEditorCommand} from '../src/runtime.js';
 
 test('editor commands are tokenized without shell evaluation', () => {
 	assert.deepEqual(parseEditorCommand('code --wait'), ['code', '--wait']);
@@ -48,7 +48,12 @@ test('missing GitHub CLI guidance is actionable without installing software', ()
 test('editor selection honors configuration and has platform defaults', () => {
 	assert.equal(resolveEditorCommand({VISUAL: 'code --wait', EDITOR: 'vim'}, 'darwin'), 'code --wait');
 	assert.equal(resolveEditorCommand({VISUAL: '  ', EDITOR: 'vim'}, 'darwin'), 'vim');
-	assert.equal(resolveEditorCommand({}, 'darwin'), 'open -t');
-	assert.equal(resolveEditorCommand({}, 'win32'), 'notepad');
-	assert.equal(resolveEditorCommand({}, 'linux'), 'vi');
+	assert.equal(resolveEditorCommand({}, 'darwin'), 'vim');
+	assert.equal(resolveEditorCommand({}, 'win32'), 'vim');
+	assert.equal(resolveEditorCommand({}, 'linux'), 'vim');
+});
+
+test('editor completion settles only after the blocking editor process exits', async () => {
+	await createResourceRuntime({VISUAL: 'true'}).openEditor('/tmp/amc-editor-fixture');
+	await assert.rejects(createResourceRuntime({VISUAL: 'false'}).openEditor('/tmp/amc-editor-fixture'), /exited with code 1/u);
 });

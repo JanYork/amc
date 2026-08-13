@@ -4,6 +4,8 @@ import {join} from 'node:path';
 import test from 'node:test';
 import {
 	editHook,
+	readHookPreview,
+	restoreHookEdit,
 	scanMcpServers,
 	scanHooks,
 	scanPlugins,
@@ -309,6 +311,70 @@ test('editHook opens the exact source file selected from a fresh inventory', asy
 
 	await editHook(contextFor(home), runtime, hook.id);
 	assert.deepEqual(calls.filter(call => call.program === 'editor'), [{program: 'editor', arguments_: [sourcePath]}]);
+});
+
+test('readHookPreview returns numbered-safe source text with an explicit byte ceiling', async () => {
+	const home = await createTestHome();
+	await mkdir(join(home, '.claude'), {recursive: true});
+	const sourcePath = join(home, '.claude', 'settings.json');
+	await writeFile(sourcePath, '{\n  "hooks": {"Stop": [{"hooks": [{"type": "command", "command": "safe\\u001b[31m"}]}]}\n}\n', 'utf8');
+	const runtime = runtimeWith({
+		'claude plugin list --json': '[]',
+		'codex plugin list --json': '{"installed":[]}',
+		'pi list': '',
+	});
+	const hook = (await scanHooks(contextFor(home), runtime)).hooks[0];
+	assert.ok(hook);
+
+	const preview = await readHookPreview(contextFor(home), runtime, hook.id, 48);
+
+	assert.equal(preview.sourcePath, sourcePath);
+	assert.equal(preview.lines[0], '{');
+	assert.doesNotMatch(preview.lines.join('\n'), /\u001B/u);
+	assert.equal(preview.truncated, true);
+});
+
+test('editHook rejects provider-owned Hook sources that AMC cannot safely edit', async () => {
+	const home = await createTestHome();
+	const pluginRoot = join(home, '.codex', 'plugins', 'cache', 'acme', 'example', '1.0.0');
+	await mkdir(join(pluginRoot, '.codex-plugin'), {recursive: true});
+	await mkdir(join(pluginRoot, 'hooks'), {recursive: true});
+	await writeFile(join(pluginRoot, '.codex-plugin', 'plugin.json'), JSON.stringify({hooks: 'hooks/hooks.json'}), 'utf8');
+	await writeFile(join(pluginRoot, 'hooks', 'hooks.json'), JSON.stringify({hooks: {SessionStart: [{hooks: [{type: 'command'}]}]}}), 'utf8');
+	const runtime = runtimeWith({
+		'claude plugin list --json': '[]',
+		'codex plugin list --json': JSON.stringify({installed: [{name: 'example', marketplaceName: 'acme', version: '1.0.0', scope: 'user', enabled: true}]}),
+		'pi list': '',
+	});
+	const hook = (await scanHooks(contextFor(home), runtime)).hooks[0];
+	assert.ok(hook);
+
+	await assert.rejects(editHook(contextFor(home), runtime, hook.id), /HOOK_EDIT_UNSUPPORTED/u);
+});
+
+test('invalid JSON edited in Vim remains in place and can be safely restored once', async () => {
+	const home = await createTestHome();
+	await mkdir(join(home, '.claude'), {recursive: true});
+	const sourcePath = join(home, '.claude', 'settings.json');
+	const original = JSON.stringify({hooks: {Stop: [{hooks: [{type: 'command'}]}]}});
+	await writeFile(sourcePath, original, 'utf8');
+	const base = runtimeWith({
+		'claude plugin list --json': '[]',
+		'codex plugin list --json': '{"installed":[]}',
+		'pi list': '',
+	});
+	const runtime: ResourceRuntime = {...base, openEditor: path => writeFile(path, '{invalid', 'utf8')};
+	const hook = (await scanHooks(contextFor(home), runtime)).hooks[0];
+	assert.ok(hook);
+
+	const result = await editHook(contextFor(home), runtime, hook.id);
+
+	assert.equal(result.state, 'invalid');
+	assert.equal(await readFile(sourcePath, 'utf8'), '{invalid');
+	if (result.state !== 'invalid') assert.fail('Expected invalid edit result.');
+	await restoreHookEdit(result.recovery);
+	assert.equal(await readFile(sourcePath, 'utf8'), original);
+	await assert.rejects(restoreHookEdit(result.recovery), /HOOK_EDIT_CHANGED/u);
 });
 
 test('setHookEnabled parks and restores one JSON hook with backups', async () => {
