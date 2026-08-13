@@ -72,5 +72,3 @@ jobs:
           HOME="$HOME_DIR" "$AMC" list
           HOME="$HOME_DIR" "$AMC" migrate --all
           test ! -e "$HOME_DIR/.amc"
-      - name: Validate npm publishing without publishing
-        run: npm publish --dry-run --access public

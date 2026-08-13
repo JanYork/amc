@@ -142,7 +142,8 @@ test('CI and release automation stays bounded to the approved matrix and publish
 	assert.match(ci, /npm run coverage/u);
 	assert.match(ci, /npm audit --audit-level=high --omit=dev --registry=https:\/\/registry\.npmjs\.org/u);
 	assert.match(ci, /npm audit --audit-level=high --registry=https:\/\/registry\.npmjs\.org/u);
-	assert.match(ci, /npm publish --dry-run --access public/u);
+	assert.match(ci, /npm pack --pack-destination/u);
+	assert.doesNotMatch(ci, /npm publish --dry-run/u);
 	assert.match(ci, /test ! -e "\$HOME_DIR\/\.amc"/u);
 	assert.equal((ci.match(/actions\/checkout@v5/gu) ?? []).length, 2);
 	assert.equal((ci.match(/actions\/setup-node@v6/gu) ?? []).length, 2);
