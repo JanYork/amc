@@ -1,5 +1,22 @@
 # Changelog
 
+## [1.1.0](https://github.com/JanYork/amc/compare/v1.0.0...v1.1.0) (2026-08-13)
+
+
+### Features
+
+* preview and edit hooks in the TUI ([7d6b6cd](https://github.com/JanYork/amc/commit/7d6b6cde523b0eea4442610ec9a232ef3cec3d3d))
+
+
+### Bug Fixes
+
+* keep release tags component-free ([9b5df2e](https://github.com/JanYork/amc/commit/9b5df2e7ccf3516f20702458e9322d167e34a273))
+
+
+### Continuous Integration
+
+* avoid published-version checks in package gate ([9371c7e](https://github.com/JanYork/amc/commit/9371c7ed366cc55f7a2cb9b095e13d1d9cc16aea))
+
 ## 1.0.0 (2026-08-06)
 
 
