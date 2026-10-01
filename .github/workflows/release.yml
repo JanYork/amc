@@ -13,6 +13,6 @@ jobs:
       pull-requests: write
     steps:
       - name: Create or update release pull request
-        uses: googleapis/release-please-action@v4
+        uses: googleapis/release-please-action@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
