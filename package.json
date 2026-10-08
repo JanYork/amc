@@ -26,7 +26,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "ink": "7.1.1",
+    "ink": "8.0.0",
     "react": "19.2.8"
   },
   "devDependencies": {
